@@ -69,14 +69,6 @@ python tests/test_ragas_setup.py
 python benchmark/ragas_benchmark.py
 ```
 
-## 📊 Current Results (k=3 retrieval)
-
-| Metric | ChromaDB RAG | GraphRAG | Improvement |
-|--------|--------------|----------|-------------|
-| Context Recall | 0.6000 | 0.6000 | +0.00% |
-| Faithfulness | 0.6146 | 0.7644 | **+24.37%** |
-| Factual Correctness | 0.3720 | 0.4000 | **+7.53%** |
-
 ## 🔍 Key Components
 
 ### RAG Implementations (`RAGvsGraphRAG.py`)

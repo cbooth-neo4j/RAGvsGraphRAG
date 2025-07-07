@@ -1,0 +1,12 @@
+{
+  "chroma_results": {
+    "context_recall": 0.6,
+    "faithfulness": 0.6659104784104785,
+    "factual_correctness": 0.378
+  },
+  "graphrag_results": {
+    "context_recall": 0.6,
+    "faithfulness": 0.6984150326797385,
+    "factual_correctness": 0.4205
+  }
+}

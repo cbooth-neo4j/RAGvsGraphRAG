@@ -34,10 +34,16 @@ from RAGvsGraphRAG import (
 )
 
 # Initialize LLM and embeddings for RAGAS
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+SEED = 42
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0,
+    model_kwargs={"seed": SEED},
+    max_retries=0
+)
 embeddings = OpenAIEmbeddings()
 
-def load_benchmark_data(csv_path: str = "benchmark.csv") -> List[Dict[str, str]]:
+def load_benchmark_data(csv_path: str = "benchmark/benchmark.csv") -> List[Dict[str, str]]:
     """Load benchmark questions and ground truth answers"""
     df = pd.read_csv(csv_path, delimiter=';')
     
@@ -68,7 +74,7 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
         try:
             # Query the appropriate RAG system
             if approach == "chroma":
-                result = query_chroma_with_llm(query, k=5)
+                result = query_chroma_with_llm(query, k=1)
             elif approach == "graphrag":
                 result = query_neo4j_with_llm(query, k=5)
             else:
@@ -307,7 +313,7 @@ def main_simple():
     print("=" * 60)
     
     # Load benchmark data
-    benchmark_data = load_benchmark_data("benchmark.csv")
+    benchmark_data = load_benchmark_data()
     
     # Collect evaluation data for both approaches
     print("\n📋 Phase 1: Data Collection")

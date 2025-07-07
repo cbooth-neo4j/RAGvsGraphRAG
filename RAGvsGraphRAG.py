@@ -46,8 +46,15 @@ NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 INDEX_NAME = "chunk_embedding"  # Match the index name from custom_graph_processor.py
 
 # Initialize embeddings and LLM
+SEED = 42
 embeddings = OpenAIEmbeddings()
-llm = OpenAILLM(model_name="gpt-4o-mini", model_params={"temperature": 0})
+llm = OpenAILLM(
+    model_name="gpt-4o-mini", 
+    model_params={
+        "temperature": 0,
+        "seed": SEED
+    }
+)
 
 # %% [markdown]
 # ## Verify Database Connections
@@ -84,7 +91,7 @@ with neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as
 # ### 1. ChromaDB Query Function with LLM Response
 
 # %%
-def query_chroma_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
+def query_chroma_with_llm(query: str, k: int = 1) -> Dict[str, Any]:
     """Query ChromaDB and generate LLM response"""
     # Initialize ChromaDB
     vectorstore = Chroma(
@@ -95,6 +102,14 @@ def query_chroma_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
     
     # Perform similarity search
     docs = vectorstore.similarity_search_with_relevance_scores(query, k=k)
+    
+    # Add deterministic sorting for consistent results
+    # Sort by: 1) similarity score (desc), 2) content hash (for ties), 3) metadata hash
+    docs = sorted(docs, key=lambda x: (
+        -x[1],  # Negative similarity score for descending order
+        hash(x[0].page_content),  # Content hash for deterministic tie-breaking
+        hash(str(sorted(x[0].metadata.items())))  # Metadata hash for additional stability
+    ))
     
     # Prepare context from retrieved documents
     context_parts = []
@@ -150,8 +165,8 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
         # Query parameters for the safe Neo4j pattern
         query_params = {
             'query_vector': query_vector,
-            'embedding_match_min': 0.4,  # Lower threshold like Neo4j example (was 0.7)
-            'embedding_match_max': 0.9   # Lower threshold like Neo4j example (was 0.95)
+            'embedding_match_min': 0.4, 
+            'embedding_match_max': 0.9   
         }
         
         try:
@@ -230,8 +245,8 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
             // Find the document of the chunk
             MATCH (chunk)-[:PART_OF]->(d:Document)
             
-            // Get entities from chunks with frequency prioritization (Neo4j pattern)
-            CALL {
+            // Get entities from chunks with frequency prioritization
+            CALL (chunk) {
                 WITH chunk
                 OPTIONAL MATCH (chunk)-[:HAS_ENTITY]->(e)
                 WITH e, count(*) AS numChunks
@@ -243,7 +258,7 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
                      $embedding_match_min as embedding_match_min,
                      $embedding_match_max as embedding_match_max
                 
-                // Apply Neo4j safe traversal pattern based on embedding similarity
+                // Apply safe traversal pattern based on embedding similarity
                 WITH
                 CASE
                     // Low/medium similarity: 1-hop traversal with safety constraints
@@ -293,7 +308,7 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
                  [e IN entities | e.name] AS entity_names,
                  [n IN nodes WHERE n.name IS NOT NULL | n.name] AS related_names
             
-            // Structured output similar to Neo4j example - clear separation of content types
+            // Structured output of clear separation of content types
             WITH d,
                  score,
                  "Text Content:\\n" + chunk.text + 
@@ -451,4 +466,4 @@ query_neo4j_enhanced = query_neo4j_with_llm
 # Example usage - remove this if you don't want auto-execution
 if __name__ == "__main__":
     test_query = "What are the main vendor requirements?"
-    results = compare_both_approaches(test_query, k=3)
+    results = compare_both_approaches(test_query, k=1)
