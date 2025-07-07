@@ -7,6 +7,13 @@ to ensure everything works before running the full benchmark.
 
 import warnings
 warnings.filterwarnings("ignore")
+import sys
+import os
+
+# Add parent directory to path so we can import from the main project
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add benchmark directory to path for benchmark imports
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'benchmark'))
 
 from ragas_benchmark import (
     load_benchmark_data,
@@ -21,7 +28,10 @@ def test_ragas_setup():
     print("=" * 50)
     
     # Load benchmark data and take first 3 questions
-    benchmark_data = load_benchmark_data("benchmark.csv")
+    # Get the path to benchmark.csv in the benchmark folder
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    benchmark_path = os.path.join(project_root, "benchmark", "benchmark.csv")
+    benchmark_data = load_benchmark_data(benchmark_path)
     sample_data = benchmark_data[:3]  # Test with first 3 questions
     
     print(f"\n📝 Testing with {len(sample_data)} sample questions:")

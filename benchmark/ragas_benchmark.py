@@ -9,9 +9,14 @@ import pandas as pd
 import json
 import time
 import math
+import sys
+import os
 from typing import List, Dict, Any
 import warnings
 warnings.filterwarnings("ignore")
+
+# Add parent directory to path so we can import from the main project
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Basic RAGAS setup following the documentation
 from langchain_openai import ChatOpenAI

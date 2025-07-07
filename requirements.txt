@@ -1,14 +1,28 @@
+# Core ML and NLP packages
 spacy>=3.7.2
+pandas>=2.0.0
+
+# PDF processing
 pypdf>=3.17.1
+
+# Environment management
 python-dotenv>=1.0.0
+
+# LangChain ecosystem
 langchain>=0.1.0
 langchain-openai>=0.0.2
 langchain-community>=0.0.10
+langchain-chroma>=0.1.0
+langchain-neo4j>=0.1.0
+
+# Vector databases and graph databases
 chromadb>=0.4.22
 neo4j>=5.14.1
+neo4j-graphrag>=0.1.0
+
+# OpenAI integration
 openai>=1.3.7
 tiktoken>=0.5.2
+
+# Evaluation framework
 ragas>=0.0.22
-neo4j-graphrag>=0.1.0
-gradio>=4.0.0
-langchain-neo4j>=0.1.0
