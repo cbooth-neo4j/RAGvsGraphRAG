@@ -1,6 +1,8 @@
 """
-Benchmark package for RAGvsGraphRAG project
+Benchmark package for RAG vs GraphRAG comparison
 
-This package contains benchmark scripts and data for evaluating the performance
-of RAG and GraphRAG implementations using the RAGAS framework.
-""" 
+This package contains modules for benchmarking different RAG approaches
+using the RAGAS evaluation framework.
+"""
+
+__version__ = "1.0.0" 

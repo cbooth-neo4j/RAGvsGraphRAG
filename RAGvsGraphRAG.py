@@ -303,7 +303,7 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
                     entities
             }
             
-            // Build enhanced content with entity context (structured like Neo4j example)
+            // Build enhanced content with entity context
             WITH d, chunk, chunk_item.score as score, entities, nodes, rels,
                  [e IN entities | e.name] AS entity_names,
                  [n IN nodes WHERE n.name IS NOT NULL | n.name] AS related_names
@@ -423,16 +423,191 @@ Please provide a factual, well-structured response."""
             }
 
 # %% [markdown]
-# ### 3. Simple Comparison Function
+# ### 3. Neo4j Text2Cypher Query Function with LLM Response
 
 # %%
-def compare_both_approaches(query: str, k: int = 5):
-    """Compare ChromaDB vs GraphRAG approaches side by side"""
+def query_neo4j_text2cypher(query: str) -> Dict[str, Any]:
+    """Neo4j Text2Cypher query with natural language to Cypher conversion"""
+    
+    # Dynamically extract the Neo4j schema from the actual database
+    from langchain_neo4j import Neo4jGraph
+    
+    # Create Neo4j graph connection to extract schema
+    graph = Neo4jGraph(
+        url=NEO4J_URI,
+        username=NEO4J_USER,
+        password=NEO4J_PASSWORD,
+        enhanced_schema=True
+    )
+    
+    # Refresh and get the current schema
+    graph.refresh_schema()
+    neo4j_schema = graph.schema
+    print(f"🔍 Text2Cypher - Schema extracted: {len(neo4j_schema)} characters")
+
+    # Use GPT-4-turbo for better Cypher query generation
+    text2cypher_llm = OpenAILLM(
+        model_name="gpt-4.1-mini", 
+        model_params={
+            "temperature": 0,
+            "seed": SEED
+        }
+    )
+    print(f"🔍 Text2Cypher - Using GPT-4o-mini")
+
+    # Few-shot examples - ALWAYS use chunk text search for specific company/data questions
+    examples = [
+        "USER INPUT: 'What city is NovaGrid Energy Corporation headquartered in?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'NovaGrid' RETURN c.text LIMIT 10",
+        "USER INPUT: 'What year is AlTahadi Aviation Group scheduled to take its inaugural flight?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'AlTahadi' RETURN c.text LIMIT 10", 
+        "USER INPUT: 'Where is AtlasVentures headquartered?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'AtlasVentures' RETURN c.text LIMIT 10",
+        "USER INPUT: 'What is the revenue of NovaGrid?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'NovaGrid' RETURN c.text LIMIT 10",
+        "USER INPUT: 'How many Boeing aircraft does AlTahadi have?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'Boeing' OR c.text CONTAINS 'aircraft' RETURN c.text LIMIT 10",
+        "USER INPUT: 'Which system must integrate with SAP Concur?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'SAP Concur' OR c.text CONTAINS 'integration' RETURN c.text LIMIT 10",
+        "USER INPUT: 'What jobs will be created by 2030?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS '2030' OR c.text CONTAINS 'jobs' RETURN c.text LIMIT 10",
+        "USER INPUT: 'Which RFP mentions virtual accounts?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'virtual account' OR c.text CONTAINS 'Virtual Account' RETURN c.text LIMIT 10",
+        "USER INPUT: 'When are presentations scheduled?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'presentation' OR c.text CONTAINS 'August' RETURN c.text LIMIT 10",
+        "USER INPUT: 'What is AtlasVentures proposal deadline?' QUERY: MATCH (c:Chunk) WHERE c.text CONTAINS 'AtlasVentures' OR c.text CONTAINS 'deadline' RETURN c.text LIMIT 10"
+    ]
+    
+    with neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
+        print(f"🔍 Executing Text2Cypher query for: {query}")
+        
+        try:
+            from neo4j_graphrag.retrievers import Text2CypherRetriever
+            
+            # Initialize the Text2Cypher retriever with GPT-4-turbo
+            retriever = Text2CypherRetriever(
+                driver=driver,
+                llm=text2cypher_llm,  # Use the more powerful model
+                neo4j_schema=neo4j_schema,
+                examples=examples,
+                neo4j_database="neo4j"
+            )
+            
+            print(f"🔍 Text2Cypher retriever initialized successfully")
+            
+            # Generate Cypher query and execute it
+            search_results = retriever.search(query_text=query)
+            
+            # Try to access the generated Cypher query for debugging
+            if hasattr(search_results, 'metadata') and search_results.metadata:
+                if 'cypher_query' in search_results.metadata:
+                    print(f"🔍 Generated Cypher: {search_results.metadata['cypher_query']}")
+                elif 'cypher' in search_results.metadata:
+                    print(f"🔍 Generated Cypher: {search_results.metadata['cypher']}")
+                else:
+                    print(f"🔍 Metadata keys: {list(search_results.metadata.keys())}")
+                    print(f"🔍 Full metadata: {search_results.metadata}")
+            
+            # Check if we can access the retriever's last query
+            if hasattr(retriever, '_last_cypher_query'):
+                print(f"🔍 Last Cypher query: {retriever._last_cypher_query}")
+            
+            print(f"🔍 Text2Cypher search completed, type: {type(search_results)}")
+            
+            if hasattr(search_results, 'items'):
+                items = search_results.items
+                print(f"🔍 Found {len(items)} items in search_results.items")
+            else:
+                items = search_results if isinstance(search_results, list) else [search_results]
+                print(f"🔍 Using direct results, type: {type(items)}, length: {len(items) if hasattr(items, '__len__') else 'unknown'}")
+            
+            print(f"✅ Text2Cypher retrieved {len(items) if hasattr(items, '__len__') else 'unknown'} results")
+            
+            # Format results for LLM processing
+            retrieval_details = []
+            context_parts = []
+            
+            for i, item in enumerate(items, 1):
+                print(f"🔍 Processing item {i}: {type(item)}")
+                
+                if hasattr(item, 'content'):
+                    content = item.content
+                    print(f"🔍 Item {i} content: {str(content)[:100]}...")
+                elif isinstance(item, dict):
+                    content = str(item)
+                    print(f"🔍 Item {i} dict: {str(content)[:100]}...")
+                else:
+                    content = str(item)
+                    print(f"🔍 Item {i} string: {str(content)[:100]}...")
+                
+                context_parts.append(f"Result {i}:\n{content}")
+                retrieval_details.append({
+                    'content': content,
+                    'source': 'Text2Cypher Query',
+                    'type': 'cypher_result'
+                })
+            
+            if not context_parts:
+                print("⚠️ No context parts found!")
+                return {
+                    'method': 'Text2Cypher + LLM',
+                    'query': query,
+                    'final_answer': 'No results found using Text2Cypher approach.',
+                    'retrieved_chunks': 0,
+                    'retrieval_details': []
+                }
+            
+            context = "\n\n".join(context_parts)
+            print(f"🔍 Combined context length: {len(context)} characters")
+            
+            # Generate LLM response with Text2Cypher results
+            prompt = f"""Based on the following query results from a knowledge graph database, provide a comprehensive answer to the question.
+
+Question: {query}
+
+Query Results:
+{context}
+
+Instructions:
+1. Use the information from the query results to answer the question directly
+2. If the results contain the exact answer, state it clearly
+3. If the results are partial or need interpretation, explain what you found
+4. If the results don't contain enough information to answer the question, state this clearly
+5. Be factual and only use information present in the results
+6. Format your response clearly and concisely
+
+Please provide a factual, well-structured response."""
+
+            try:
+                llm_response = text2cypher_llm.invoke(prompt)  # Use GPT-4-turbo for final answer too
+                final_answer = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+                print(f"🔍 LLM response generated: {len(final_answer)} characters")
+            except Exception as e:
+                final_answer = f"Error generating LLM response: {e}"
+                print(f"❌ LLM error: {e}")
+            
+            return {
+                'method': 'Text2Cypher + LLM',
+                'query': query,
+                'final_answer': final_answer,
+                'retrieved_chunks': len(items) if hasattr(items, '__len__') else 0,
+                'retrieval_details': retrieval_details
+            }
+            
+        except Exception as e:
+            print(f"❌ Text2Cypher error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'method': 'Text2Cypher + LLM',
+                'query': query,
+                'final_answer': f"Error with Text2Cypher processing: {e}",
+                'retrieved_chunks': 0,
+                'retrieval_details': []
+            }
+
+# %% [markdown]
+# ### 4. Three-Way Comparison Function
+
+# %%
+def compare_all_approaches(query: str, k: int = 5):
+    """Compare ChromaDB vs GraphRAG vs Text2Cypher approaches side by side"""
     print(f"\n{'='*80}")
     print(f"🔍 QUERY: {query}")
     print(f"{'='*80}")
     
-    # Get results from both approaches
+    # Get results from all three approaches
     print("\n🔵 ChromaDB + LLM Result:")
     print("-" * 50)
     chroma_result = query_chroma_with_llm(query, k)
@@ -445,19 +620,28 @@ def compare_both_approaches(query: str, k: int = 5):
     print(f"Retrieved Chunks: {graphrag_result['retrieved_chunks']}")
     print(f"\n{graphrag_result['final_answer']}")
     
+    print(f"\n🟡 Text2Cypher + LLM Result:")
+    print("-" * 50)
+    text2cypher_result = query_neo4j_text2cypher(query)
+    print(f"Retrieved Results: {text2cypher_result['retrieved_chunks']}")
+    print(f"\n{text2cypher_result['final_answer']}")
+    
     print(f"\n{'='*80}")
-    print("✅ COMPARISON COMPLETE")
+    print("✅ THREE-WAY COMPARISON COMPLETE")
     print(f"{'='*80}")
     
     return {
         'chroma_result': chroma_result,
-        'graphrag_result': graphrag_result
+        'graphrag_result': graphrag_result,
+        'text2cypher_result': text2cypher_result
     }
+
 
 # Create aliases for backward compatibility
 query_chroma = query_chroma_with_llm
 query_neo4j = query_neo4j_with_llm
 query_neo4j_enhanced = query_neo4j_with_llm
+query_text2cypher = query_neo4j_text2cypher
 
 # %% [markdown]
 # ## Test the Comparison
@@ -466,4 +650,4 @@ query_neo4j_enhanced = query_neo4j_with_llm
 # Example usage - remove this if you don't want auto-execution
 if __name__ == "__main__":
     test_query = "What are the main vendor requirements?"
-    results = compare_both_approaches(test_query, k=1)
+    results = compare_all_approaches(test_query, k=1)

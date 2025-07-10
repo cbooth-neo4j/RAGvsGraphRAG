@@ -11,15 +11,20 @@ import sys
 import os
 
 # Add parent directory to path so we can import from the main project
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# Add benchmark directory to path for benchmark imports
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'benchmark'))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 
+# Add benchmark directory to path for benchmark imports  
+benchmark_dir = os.path.join(project_root, 'benchmark')
+sys.path.insert(0, benchmark_dir)
+
+# Now import from the benchmark module
 from ragas_benchmark import (
     load_benchmark_data,
     collect_evaluation_data_simple,
     evaluate_with_ragas_simple,
-    create_comparison_table_simple
+    create_comparison_table_simple,
+    create_three_way_comparison_table
 )
 
 def test_ragas_setup():
@@ -49,17 +54,25 @@ def test_ragas_setup():
         graphrag_dataset = collect_evaluation_data_simple(sample_data, approach="graphrag")
         graphrag_results = evaluate_with_ragas_simple(graphrag_dataset, "GraphRAG (Test)")
         
-        # Create comparison
-        print(f"\n📊 Creating comparison table...")
-        comparison_table = create_comparison_table_simple(chroma_results, graphrag_results)
+        # Test Text2Cypher approach
+        print(f"\n🟡 Testing Text2Cypher...")
+        text2cypher_dataset = collect_evaluation_data_simple(sample_data, approach="text2cypher")
+        text2cypher_results = evaluate_with_ragas_simple(text2cypher_dataset, "Text2Cypher (Test)")
         
-        print("\n" + "=" * 60)
-        print("🎯 TEST RESULTS")
-        print("=" * 60)
-        print(comparison_table.to_string(index=False))
+        # Create three-way comparison
+        print(f"\n📊 Creating three-way comparison...")
+        three_way_comparison = create_three_way_comparison_table(chroma_results, graphrag_results, text2cypher_results)
+        
+        print("\n" + "=" * 80)
+        print("🎯 THREE-WAY TEST RESULTS")
+        print("=" * 80)
+        print(three_way_comparison.to_string(index=False))
         
         print(f"\n✅ RAGAS setup test completed successfully!")
-        print(f"✅ Both approaches working correctly")
+        print(f"✅ All three approaches working correctly:")
+        print(f"   🔵 ChromaDB RAG")
+        print(f"   🟢 GraphRAG") 
+        print(f"   🟡 Text2Cypher")
         print(f"✅ Ready to run full benchmark with {len(benchmark_data)} questions")
         
         return True
@@ -67,6 +80,8 @@ def test_ragas_setup():
     except Exception as e:
         print(f"\n❌ Test failed with error: {e}")
         print(f"❌ Please check your setup before running full benchmark")
+        import traceback
+        traceback.print_exc()
         return False
 
 if __name__ == "__main__":

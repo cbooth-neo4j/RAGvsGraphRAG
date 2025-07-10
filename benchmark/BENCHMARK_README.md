@@ -1,10 +1,15 @@
-# RAGAS Benchmark: RAG vs GraphRAG Evaluation
+# RAGAS Benchmark: RAG vs GraphRAG vs Text2Cypher Evaluation
 
-This benchmarking system evaluates and compares ChromaDB RAG vs GraphRAG approaches using the RAGAS (RAG Assessment) framework.
+This benchmarking system evaluates and compares three RAG approaches using the RAGAS (RAG Assessment) framework:
+- **ChromaDB RAG**: Traditional vector similarity search
+- **GraphRAG**: Multi-hop graph traversal with context enhancement  
+- **Text2Cypher**: Natural language to Cypher query translation
+
+The system includes professional visualizations with charts, heatmaps, and performance comparisons automatically generated for comprehensive analysis.
 
 ## Overview
 
-The benchmark evaluates both approaches on 20 crafted questions from the `benchmark.csv` file using multiple RAGAS metrics:
+The benchmark evaluates all three approaches on 20 crafted questions from the `benchmark.csv` file using multiple RAGAS metrics:
 
 - **Context Recall**: How well the retrieval system finds relevant information
 - **Faithfulness**: How faithful the generated answer is to the retrieved context
@@ -12,10 +17,12 @@ The benchmark evaluates both approaches on 20 crafted questions from the `benchm
 
 ## Files
 
-- `benchmark_ragas.py` - Main benchmarking script
+- `ragas_benchmark.py` - Main benchmarking script (three-way comparison)
+- `visualizations.py` - Visualization module for generating charts and graphs
 - `test_ragas_setup.py` - Quick test script (runs on 3 questions)
 - `benchmark.csv` - 20 benchmark questions with ground truth answers
 - `BENCHMARK_README.md` - This documentation
+- `benchmark_outputs/` - Generated results folder (CSV, JSON, PNG charts)
 
 ## Prerequisites
 
@@ -43,39 +50,9 @@ This runs a quick test with 3 questions to verify everything works correctly.
 
 ### 2. Full Benchmark
 ```bash
-python benchmark_ragas.py
+python ragas_benchmark.py
 ```
-This runs the complete evaluation on all 20 questions.
-
-## What the Benchmark Does
-
-1. **Data Collection Phase**:
-   - Loads 20 questions from `benchmark.csv`
-   - Runs each question through both ChromaDB and GraphRAG systems
-   - Collects responses and retrieved contexts
-
-2. **RAGAS Evaluation Phase**:
-   - Evaluates both datasets using 6 RAGAS metrics
-   - Uses OpenAI GPT-4o-mini as the evaluator LLM
-
-3. **Results Analysis Phase**:
-   - Creates comparison table showing performance differences
-   - Calculates overall improvement percentages
-   - Generates summary statistics
-
-4. **Output Generation**:
-   - Displays comprehensive results table
-   - Saves detailed results to CSV files
-   - Creates JSON file with raw RAGAS scores
-
-## Output Files
-
-After running the benchmark, you'll get:
-
-- `benchmark_results_chroma.csv` - Detailed ChromaDB results
-- `benchmark_results_graphrag.csv` - Detailed GraphRAG results  
-- `benchmark_comparison_table.csv` - Side-by-side comparison table
-- `benchmark_ragas_results.json` - Raw RAGAS evaluation scores
+This runs the complete three-way evaluation on all 20 questions with automatic visualization generation.
 
 
 ## Interpreting Results
@@ -85,6 +62,23 @@ After running the benchmark, you'll get:
 1. **Context Recall (0.0-1.0)**: Higher = better retrieval coverage
 2. **Faithfulness (0.0-1.0)**: Higher = answers stick to retrieved facts
 3. **Factual Correctness (0.0-1.0)**: Higher = more accurate responses
+
+### How Overall Performance is Calculated
+
+#### Average Score Calculation
+The overall performance for each approach is calculated as the **arithmetic mean** of all three metric scores:
+
+```
+Average Score = (Context Recall + Faithfulness + Factual Correctness) / 3
+```
+
+For example:
+- ChromaDB RAG: (0.75 + 0.80 + 0.70) / 3 = 0.75
+- GraphRAG: (0.85 + 0.88 + 0.82) / 3 = 0.85
+
+#### Winner Determination
+The **overall winner** is determined by comparing the average scores across all approaches.
+
 
 ### How RAGAS Creates Individual Scores
 
@@ -111,7 +105,6 @@ After running the benchmark, you'll get:
   - Takes the generated answer and ground truth
   - Asks the evaluator LLM: "How factually correct is this answer compared to the reference?"
   - Scores based on factual accuracy and completeness
-
 
 ## Customization
 
@@ -144,5 +137,14 @@ Modify the `k` parameter when calling the query functions:
 ```python
 # Get more/fewer retrieved chunks
 result = query_chroma_with_llm(query, k=10)  # Default is 3
+```
+
+### Customizing Visualizations
+
+To modify chart appearance or add new visualizations, edit `visualizations.py`:
+```python
+# Change colors, styling, or add new charts
+colors = ['#3498db', '#2ecc71', '#f39c12']  # Customize colors
+plt.figure(figsize=(12, 8))  # Adjust chart size
 ```
 

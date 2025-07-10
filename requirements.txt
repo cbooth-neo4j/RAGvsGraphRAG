@@ -26,3 +26,8 @@ tiktoken>=0.5.2
 
 # Evaluation framework
 ragas>=0.0.22
+
+#Visualizations
+matplotlib==3.10.3
+matplotlib-inline==0.1.7
+seaborn==0.13.2

@@ -11,13 +11,14 @@ This script processes RFP documents by:
 import os
 import re
 import spacy
+import json
 from pypdf import PdfReader
 from pathlib import Path
 from typing import List, Dict, Tuple, Any
 from dotenv import load_dotenv
 import neo4j
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 
 # Load environment variables
 load_dotenv()
@@ -32,6 +33,7 @@ class CustomGraphProcessor:
         self.nlp = spacy.load("en_core_web_sm")
         self.driver = neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         self.embeddings = OpenAIEmbeddings()
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=50,
@@ -84,9 +86,9 @@ class CustomGraphProcessor:
             return []
     
     def extract_entities(self, text: str) -> Dict[str, List[Dict[str, Any]]]:
-        """Extract entities using spaCy with custom rules for RFP documents"""
-        doc = self.nlp(text)
+        """Extract entities using GPT-4o-mini for intelligent entity extraction from RFP documents"""
         
+        # Initialize entities structure
         entities = {
             'organizations': [],
             'locations': [],
@@ -96,42 +98,98 @@ class CustomGraphProcessor:
             'requirements': []
         }
         
-        # Extract standard spaCy entities
-        for ent in doc.ents:
-            entity_info = {
-                'text': ent.text.strip(),
-                'label': ent.label_,
-                'start': ent.start_char,
-                'end': ent.end_char
-            }
+        # Create prompt for GPT-4o-mini
+        prompt = f"""
+        Extract entities from the following RFP document text. Return ONLY a valid JSON object with the following structure:
+        
+        {{
+            "organizations": [{{"text": "org name", "label": "ORG"}}],
+            "locations": [{{"text": "location name", "label": "GPE"}}],
+            "dates": [{{"text": "date/time", "label": "DATE"}}],
+            "persons": [{{"text": "person name", "label": "PERSON"}}],
+            "financial": [{{"text": "financial amount/term", "label": "MONEY"}}],
+            "requirements": [{{"text": "specific requirement", "label": "REQUIREMENT"}}]
+        }}
+        
+        Guidelines:
+        - Organizations: Company names, institutions, government agencies
+        - Locations: Cities, states, countries, addresses
+        - Dates: Specific dates, timeframes, deadlines
+        - Persons: Individual names, titles, contact persons
+        - Financial: Dollar amounts, percentages, financial terms
+        - Requirements: Specific service requirements, capabilities needed, scope items (keep concise, max 50 chars each)
+        
+        Text to analyze:
+        {text[:3000]}  # Limit to first 3000 chars to avoid token limits
+        
+        Return only the JSON object, no other text.
+        """
+        
+        try:
+            # Get response from GPT-4o-mini
+            response = self.llm.invoke(prompt)
+            response_text = response.content.strip()
             
-            if ent.label_ in ["ORG"]:
-                entities['organizations'].append(entity_info)
-            elif ent.label_ in ["GPE", "LOC"]:
-                entities['locations'].append(entity_info)
-            elif ent.label_ in ["DATE", "TIME"]:
-                entities['dates'].append(entity_info)
-            elif ent.label_ in ["PERSON"]:
-                entities['persons'].append(entity_info)
-            elif ent.label_ in ["MONEY", "PERCENT", "QUANTITY"]:
-                entities['financial'].append(entity_info)
-        
-        # Extract RFP-specific requirements using patterns
-        requirement_patterns = [
-            r'(?i)(?:scope of work|requirements?|services?|capabilities?)[:\s]*([^.]+)',
-            r'(?i)(\d+\.\s*[^.]+(?:management|service|capability|solution))',
-            r'(?i)(cash management|liquidity management|trade finance|payment|banking)'
-        ]
-        
-        for pattern in requirement_patterns:
-            matches = re.finditer(pattern, text)
-            for match in matches:
-                entities['requirements'].append({
-                    'text': match.group(1).strip(),
-                    'label': 'REQUIREMENT',
-                    'start': match.start(),
-                    'end': match.end()
-                })
+            # Try to extract JSON from response
+            if response_text.startswith('```json'):
+                response_text = response_text[7:-3]  # Remove ```json and ```
+            elif response_text.startswith('```'):
+                response_text = response_text[3:-3]  # Remove ``` and ```
+            
+            # Clean up any extra text before/after JSON
+            response_text = response_text.strip()
+            
+            # Parse JSON response
+            try:
+                extracted_entities = json.loads(response_text)
+            except json.JSONDecodeError as json_error:
+                print(f"JSON parsing error: {json_error}")
+                print(f"Response text: {response_text[:200]}...")
+                raise
+            
+            # Validate and clean the extracted entities
+            for entity_type, entity_list in extracted_entities.items():
+                if entity_type in entities and isinstance(entity_list, list):
+                    for entity in entity_list:
+                        if isinstance(entity, dict) and 'text' in entity:
+                            # Clean and validate entity text
+                            entity_text = entity['text'].strip()
+                            if entity_text and len(entity_text) <= 200:  # Reasonable length limit
+                                entity_info = {
+                                    'text': entity_text,
+                                    'label': entity.get('label', entity_type.upper()),
+                                    'start': 0,  # We don't have exact positions from GPT
+                                    'end': len(entity_text)
+                                }
+                                entities[entity_type].append(entity_info)
+            
+            print(f"✅ Extracted {sum(len(entities[et]) for et in entities)} entities using GPT-4o-mini")
+            
+        except Exception as e:
+            print(f"❌ Error extracting entities with GPT-4o-mini: {e}")
+            print("Falling back to spaCy extraction...")
+            
+            # Fallback to spaCy extraction
+            doc = self.nlp(text)
+            
+            for ent in doc.ents:
+                entity_info = {
+                    'text': ent.text.strip(),
+                    'label': ent.label_,
+                    'start': ent.start_char,
+                    'end': ent.end_char
+                }
+                
+                if ent.label_ in ["ORG"]:
+                    entities['organizations'].append(entity_info)
+                elif ent.label_ in ["GPE", "LOC"]:
+                    entities['locations'].append(entity_info)
+                elif ent.label_ in ["DATE", "TIME"]:
+                    entities['dates'].append(entity_info)
+                elif ent.label_ in ["PERSON"]:
+                    entities['persons'].append(entity_info)
+                elif ent.label_ in ["MONEY", "PERCENT", "QUANTITY"]:
+                    entities['financial'].append(entity_info)
         
         return entities
     
@@ -366,7 +424,7 @@ class CustomGraphProcessor:
                     chunk_entity_ids.append(('Date', date_name))
                 
                 for req in entities['requirements']:
-                    req_name = req['text'][:100]  # Limit length
+                    req_name = req['text']  # GPT-4o-mini already provides concise requirements
                     req_embedding = self.create_embedding(req_name)
                     session.run("""
                         MERGE (r:Requirement {name: $name})

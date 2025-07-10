@@ -1,0 +1,23 @@
+{
+  "chroma_results": {
+    "context_recall": 0.4,
+    "faithfulness": 0.7963690476190476,
+    "factual_correctness": 0.28500000000000003
+  },
+  "graphrag_results": {
+    "context_recall": 0.525,
+    "faithfulness": 0.6966666666666665,
+    "factual_correctness": 0.3505
+  },
+  "text2cypher_results": {
+    "context_recall": 0.25,
+    "faithfulness": 0.3992948717948718,
+    "factual_correctness": 0.136
+  },
+  "comparison_summary": {
+    "chroma_avg": 0.4938,
+    "graphrag_avg": 0.5240666666666667,
+    "text2cypher_avg": 0.26176666666666665,
+    "best_overall": "GraphRAG"
+  }
+}

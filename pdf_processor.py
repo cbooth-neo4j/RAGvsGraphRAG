@@ -71,8 +71,8 @@ def split_text(text: str, source_file: str, maintain_sections: bool = True) -> L
             
             # Split section content
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200,
+                chunk_size=300,
+                chunk_overlap=50,
                 length_function=len,
                 separators=["\n\n", "\n", " ", ""]
             )
@@ -89,7 +89,7 @@ def split_text(text: str, source_file: str, maintain_sections: bool = True) -> L
     else:
         # Fall back to simple chunking
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=200,
+            chunk_size=300,
             chunk_overlap=50,
             length_function=len,
             separators=["\n\n", "\n", " ", ""]

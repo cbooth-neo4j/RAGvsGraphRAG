@@ -15,6 +15,17 @@ from typing import List, Dict, Any
 import warnings
 warnings.filterwarnings("ignore")
 
+# Import visualization module
+try:
+    from .visualizations import create_visualizations
+except ImportError:
+    # Fallback for when script is run directly
+    import sys
+    import os
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, current_dir)
+    from visualizations import create_visualizations
+
 # Add parent directory to path so we can import from the main project
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -30,7 +41,8 @@ from ragas.metrics import LLMContextRecall, Faithfulness, FactualCorrectness
 # Import our RAG systems
 from RAGvsGraphRAG import (
     query_chroma_with_llm,
-    query_neo4j_with_llm
+    query_neo4j_with_llm,
+    query_neo4j_text2cypher
 )
 
 # Initialize LLM and embeddings for RAGAS
@@ -77,6 +89,8 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                 result = query_chroma_with_llm(query, k=1)
             elif approach == "graphrag":
                 result = query_neo4j_with_llm(query, k=5)
+            elif approach == "text2cypher":
+                result = query_neo4j_text2cypher(query)
             else:
                 raise ValueError(f"Unknown approach: {approach}")
             
@@ -279,94 +293,183 @@ def create_comparison_table_simple(chroma_results: Dict, graphrag_results: Dict)
     
     return comparison_df
 
-def save_results_simple(chroma_dataset: List, graphrag_dataset: List, 
-                       chroma_results: Dict, graphrag_results: Dict,
-                       comparison_table: pd.DataFrame):
-    """Save results to files"""
+def create_three_way_comparison_table(chroma_results: Dict, graphrag_results: Dict, text2cypher_results: Dict) -> pd.DataFrame:
+    """Create a three-way comparison table for all approaches"""
+    
+    # Extract scores
+    def extract_scores(results):
+        if isinstance(results, dict):
+            return results
+        return {}
+    
+    chroma_scores = extract_scores(chroma_results)
+    graphrag_scores = extract_scores(graphrag_results)
+    text2cypher_scores = extract_scores(text2cypher_results)
+    
+    # Create comparison dataframe
+    metrics = []
+    chroma_values = []
+    graphrag_values = []
+    text2cypher_values = []
+    
+    # Map metric names to display names
+    metric_display_names = {
+        'context_recall': 'Context Recall',
+        'faithfulness': 'Faithfulness', 
+        'factual_correctness': 'Factual Correctness'
+    }
+    
+    for metric_key, display_name in metric_display_names.items():
+        chroma_val = chroma_scores.get(metric_key, 0.0)
+        graphrag_val = graphrag_scores.get(metric_key, 0.0)
+        text2cypher_val = text2cypher_scores.get(metric_key, 0.0)
+        
+        metrics.append(display_name)
+        chroma_values.append(round(chroma_val, 4))
+        graphrag_values.append(round(graphrag_val, 4))
+        text2cypher_values.append(round(text2cypher_val, 4))
+    
+    # Create three-way comparison table
+    comparison_df = pd.DataFrame({
+        'Metric': metrics,
+        'ChromaDB RAG': chroma_values,
+        'GraphRAG': graphrag_values,
+        'Text2Cypher': text2cypher_values
+    })
+    
+    return comparison_df
+
+
+
+def save_results_simple(chroma_dataset: List, graphrag_dataset: List, text2cypher_dataset: List,
+                       chroma_results: Dict, graphrag_results: Dict, text2cypher_results: Dict,
+                       comparison_table: pd.DataFrame, output_dir: str = "benchmark_outputs"):
+    """Save results to files in organized folder structure"""
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
     
     # Save datasets
     chroma_df = pd.DataFrame(chroma_dataset)
     graphrag_df = pd.DataFrame(graphrag_dataset)
+    text2cypher_df = pd.DataFrame(text2cypher_dataset)
     
-    chroma_df.to_csv('simple_benchmark_chroma.csv', index=False)
-    graphrag_df.to_csv('simple_benchmark_graphrag.csv', index=False)
+    chroma_df.to_csv(f'{output_dir}/simple_benchmark_chroma.csv', index=False)
+    graphrag_df.to_csv(f'{output_dir}/simple_benchmark_graphrag.csv', index=False)
+    text2cypher_df.to_csv(f'{output_dir}/simple_benchmark_text2cypher.csv', index=False)
     
     # Save comparison table
-    comparison_table.to_csv('simple_benchmark_comparison.csv', index=False)
+    comparison_table.to_csv(f'{output_dir}/simple_benchmark_three_way_comparison.csv', index=False)
     
     # Save results
-    with open('simple_benchmark_results.json', 'w') as f:
+    chroma_avg = comparison_table['ChromaDB RAG'].mean()
+    graphrag_avg = comparison_table['GraphRAG'].mean()
+    text2cypher_avg = comparison_table['Text2Cypher'].mean()
+    
+    # Determine best overall approach by highest average
+    scores = {'ChromaDB RAG': chroma_avg, 'GraphRAG': graphrag_avg, 'Text2Cypher': text2cypher_avg}
+    best_overall = max(scores, key=scores.get)
+    
+    with open(f'{output_dir}/simple_benchmark_results.json', 'w') as f:
         json.dump({
             'chroma_results': chroma_results,
-            'graphrag_results': graphrag_results
+            'graphrag_results': graphrag_results,
+            'text2cypher_results': text2cypher_results,
+            'comparison_summary': {
+                'chroma_avg': chroma_avg,
+                'graphrag_avg': graphrag_avg,
+                'text2cypher_avg': text2cypher_avg,
+                'best_overall': best_overall
+            }
         }, f, indent=2)
     
-    print("\n💾 Results saved to files:")
+    print(f"\n💾 Results saved to '{output_dir}/' folder:")
     print("  - simple_benchmark_chroma.csv")
-    print("  - simple_benchmark_graphrag.csv") 
-    print("  - simple_benchmark_comparison.csv")
+    print("  - simple_benchmark_graphrag.csv")
+    print("  - simple_benchmark_text2cypher.csv") 
+    print("  - simple_benchmark_three_way_comparison.csv")
     print("  - simple_benchmark_results.json")
 
 def main_simple():
-    """Main benchmarking function - simplified version"""
-    print("🚀 Starting Simple RAGAS Benchmark: RAG vs GraphRAG")
-    print("=" * 60)
+    """Main benchmarking function - three-way comparison"""
+    print("🚀 Starting Three-Way RAGAS Benchmark: ChromaDB vs GraphRAG vs Text2Cypher")
+    print("=" * 80)
     
     # Load benchmark data
     benchmark_data = load_benchmark_data()
     
-    # Collect evaluation data for both approaches
+    # Collect evaluation data for all three approaches
     print("\n📋 Phase 1: Data Collection")
     chroma_dataset = collect_evaluation_data_simple(benchmark_data, approach="chroma")
     graphrag_dataset = collect_evaluation_data_simple(benchmark_data, approach="graphrag")
+    text2cypher_dataset = collect_evaluation_data_simple(benchmark_data, approach="text2cypher")
     
-    # Evaluate both approaches with RAGAS
+    # Evaluate all three approaches with RAGAS
     print("\n📊 Phase 2: RAGAS Evaluation")
     chroma_results = evaluate_with_ragas_simple(chroma_dataset, "ChromaDB RAG")
     graphrag_results = evaluate_with_ragas_simple(graphrag_dataset, "GraphRAG")
+    text2cypher_results = evaluate_with_ragas_simple(text2cypher_dataset, "Text2Cypher")
     
-    # Create comparison table
+    # Create three-way comparison table
     print("\n📈 Phase 3: Results Analysis")
-    comparison_table = create_comparison_table_simple(chroma_results, graphrag_results)
+    comparison_table = create_three_way_comparison_table(chroma_results, graphrag_results, text2cypher_results)
     
     # Display results
-    print("\n" + "=" * 80)
-    print("🏆 BENCHMARK RESULTS SUMMARY")
-    print("=" * 80)
+    print("\n" + "=" * 90)
+    print("🏆 THREE-WAY BENCHMARK RESULTS SUMMARY")
+    print("=" * 90)
     print(comparison_table.to_string(index=False))
     
     # Calculate overall performance
     print("\n📊 OVERALL PERFORMANCE SUMMARY:")
-    print("-" * 40)
+    print("-" * 50)
     
     chroma_avg = comparison_table['ChromaDB RAG'].mean()
     graphrag_avg = comparison_table['GraphRAG'].mean()
+    text2cypher_avg = comparison_table['Text2Cypher'].mean()
     
-    print(f"ChromaDB RAG Average Score: {chroma_avg:.4f}")
-    print(f"GraphRAG Average Score:     {graphrag_avg:.4f}")
+    print(f"ChromaDB RAG Average Score:  {chroma_avg:.4f}")
+    print(f"GraphRAG Average Score:      {graphrag_avg:.4f}")
+    print(f"Text2Cypher Average Score:   {text2cypher_avg:.4f}")
     
+    # Determine overall winner
+    scores = {'ChromaDB RAG': chroma_avg, 'GraphRAG': graphrag_avg, 'Text2Cypher': text2cypher_avg}
+    winner = max(scores, key=scores.get)
+    winner_score = scores[winner]
+    
+    print(f"\n🏆 Overall Winner: {winner} (Score: {winner_score:.4f})")
+    
+    # Show improvements compared to ChromaDB baseline
     if graphrag_avg > chroma_avg:
-        improvement = ((graphrag_avg - chroma_avg) / chroma_avg) * 100
-        print(f"GraphRAG Overall Improvement: +{improvement:.2f}%")
-        print("🎉 GraphRAG outperforms ChromaDB RAG overall!")
-    elif chroma_avg > graphrag_avg:
-        decline = ((chroma_avg - graphrag_avg) / chroma_avg) * 100
-        print(f"GraphRAG Overall Performance: -{decline:.2f}%")
-        print("📉 ChromaDB RAG outperforms GraphRAG overall")
+        graphrag_improvement = ((graphrag_avg - chroma_avg) / chroma_avg) * 100
+        print(f"📈 GraphRAG vs ChromaDB:    +{graphrag_improvement:.2f}%")
     else:
-        print("🤝 Both approaches perform equally well on average")
+        graphrag_decline = ((chroma_avg - graphrag_avg) / chroma_avg) * 100
+        print(f"📉 GraphRAG vs ChromaDB:    -{graphrag_decline:.2f}%")
+    
+    if text2cypher_avg > chroma_avg:
+        text2cypher_improvement = ((text2cypher_avg - chroma_avg) / chroma_avg) * 100
+        print(f"📈 Text2Cypher vs ChromaDB: +{text2cypher_improvement:.2f}%")
+    else:
+        text2cypher_decline = ((chroma_avg - text2cypher_avg) / chroma_avg) * 100
+        print(f"📉 Text2Cypher vs ChromaDB: -{text2cypher_decline:.2f}%")
     
     # Save detailed results
     print("\n💾 Phase 4: Saving Results")
-    save_results_simple(chroma_dataset, graphrag_dataset, 
-                       chroma_results, graphrag_results, comparison_table)
+    save_results_simple(chroma_dataset, graphrag_dataset, text2cypher_dataset,
+                       chroma_results, graphrag_results, text2cypher_results, comparison_table)
     
-    print("\n✅ BENCHMARK COMPLETE!")
+    # Generate visualizations
+    print("\n📊 Phase 5: Generating Visualizations")
+    create_visualizations(comparison_table)
+    
+    print("\n✅ THREE-WAY BENCHMARK COMPLETE!")
     print("=" * 80)
     
     return {
         'chroma_results': chroma_results,
         'graphrag_results': graphrag_results,
+        'text2cypher_results': text2cypher_results,
         'comparison_table': comparison_table
     }
 

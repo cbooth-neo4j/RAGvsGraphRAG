@@ -11,7 +11,7 @@ NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 
 def check_schema():
-    """Check the actual Neo4j database schema"""
+    """Check database schema"""
     try:
         # Create Neo4j graph connection
         graph = Neo4jGraph(
@@ -24,7 +24,7 @@ def check_schema():
         # Refresh and print schema
         graph.refresh_schema()
         print("="*60)
-        print("ACTUAL NEO4J DATABASE SCHEMA")
+        print("NEO4J DATABASE SCHEMA")
         print("="*60)
         print(graph.schema)
         print("="*60)

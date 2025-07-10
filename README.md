@@ -1,15 +1,19 @@
-# RAG vs GraphRAG Comparison
+# RAG vs GraphRAG vs Text2Cypher Comparison
 
-A comprehensive evaluation framework comparing traditional RAG (Retrieval-Augmented Generation) with GraphRAG approaches using the RAGAS evaluation framework.
+A comprehensive evaluation framework comparing three RAG approaches using the RAGAS evaluation framework.
 
 ## 🎯 Project Overview
 
-This project implements and benchmarks two different RAG approaches:
+This project implements and benchmarks three RAG approaches:
 
-1. **Traditional RAG**: Uses ChromaDB vector store for document retrieval
-2. **GraphRAG**: Uses Neo4j knowledge graph with entity relationships and enhanced context
+1. **ChromaDB RAG**: Vector similarity search using embeddings
+2. **GraphRAG**: Graph-Enchanced-Vector Search 
+3. **Text2Cypher**: Natural language to Cypher query translation
 
-Both approaches are evaluated using the RAGAS (RAG Assessment) framework to measure performance across multiple dimensions including faithfulness, factual correctness, and context recall.
+All approaches are evaluated using RAGAS framework with automated visualizations.
+
+For more information on approach types, see: 
+https://neo4j.com/blog/developer/graphrag-field-guide-rag-patterns/
 
 ## 📁 Project Structure
 
@@ -17,6 +21,7 @@ Both approaches are evaluated using the RAGAS (RAG Assessment) framework to meas
 RAGvsGraphRAG/
 ├── 📂 benchmark/           # Benchmark scripts and data
 │   ├── ragas_benchmark.py  # Main RAGAS evaluation script
+│   ├── visualizations.py   # Automated chart generation
 │   ├── benchmark.csv       # Test questions and ground truth
 │   └── BENCHMARK_README.md # Detailed benchmark documentation
 ├── 📂 tests/               # Test and validation scripts
@@ -76,13 +81,19 @@ python benchmark/ragas_benchmark.py
 #### ChromaDB RAG
 - Vector similarity search using OpenAI embeddings
 - Simple document chunk retrieval
-- Standard retrieval-augmented generation
 
 #### GraphRAG
-- Neo4j knowledge graph with entities and relationships
+- Neo4j Graph-Enchanced Vector Search
 - Enhanced context through entity traversal
 - Safe graph traversal preventing chunk cross-contamination
-- Structured output with separated content types
+
+#### Text2Cypher
+https://neo4j.com/blog/developer/effortless-rag-text2cypherretriever/
+https://github.com/neo4j/rag-evaluation/blob/main/scripts/run_experiment_from_config_file.py
+
+- Natural language to Cypher query translation
+- Direct graph database querying
+- Few-shot examples for query generation
 
 ### Graph Processing (`graph_processor.py`)
 - Extracts entities from documents using LLMs
@@ -91,10 +102,10 @@ python benchmark/ragas_benchmark.py
 - Supports entity types: Organization, Person, Location, Date, Requirement, Financial
 
 ### Benchmark Framework (`benchmark/`)
-- RAGAS-based evaluation using GPT-4o-mini as evaluator
+- Three-way RAGAS evaluation using GPT-4o-mini as evaluator
 - Measures Context Recall, Faithfulness, and Factual Correctness
-- Comprehensive comparison tables and visualizations
-- Detailed metric explanations and scoring methodology
+- Automated professional visualizations (bar charts, heatmaps, pie charts)
+- Organized results in `benchmark_outputs/` folder
 
 ## 🔧 Key Optimizations
 

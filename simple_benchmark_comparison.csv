@@ -1,4 +1,0 @@
-Metric,ChromaDB RAG,GraphRAG,Improvement
-Context Recall,0.6,0.6,+0.00%
-Faithfulness,0.6659,0.6984,+4.88%
-Factual Correctness,0.378,0.4205,+11.24%
