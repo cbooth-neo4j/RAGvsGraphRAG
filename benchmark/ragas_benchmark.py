@@ -11,6 +11,7 @@ import time
 import math
 import sys
 import os
+import argparse
 from typing import List, Dict, Any
 import warnings
 warnings.filterwarnings("ignore")
@@ -390,8 +391,248 @@ def save_results_simple(chroma_dataset: List, graphrag_dataset: List, text2cyphe
     print("  - simple_benchmark_three_way_comparison.csv")
     print("  - simple_benchmark_results.json")
 
+def save_results_selective(datasets: Dict, results: Dict, comparison_table: pd.DataFrame, 
+                          approaches: List[str], output_dir: str = "benchmark_outputs"):
+    """Save results for selected approaches only"""
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save datasets for selected approaches
+    for approach in approaches:
+        if approach in datasets and datasets[approach]:
+            df = pd.DataFrame(datasets[approach])
+            df.to_csv(f'{output_dir}/simple_benchmark_{approach}.csv', index=False)
+            print(f"  - simple_benchmark_{approach}.csv")
+    
+    # Save comparison table
+    comparison_table.to_csv(f'{output_dir}/simple_benchmark_comparison.csv', index=False)
+    print(f"  - simple_benchmark_comparison.csv")
+    
+    # Calculate averages for selected approaches
+    averages = {}
+    for col in comparison_table.columns:
+        if col != 'Metric' and col != 'Improvement':  # Skip non-numeric columns
+            try:
+                # Check if column contains numeric data
+                if comparison_table[col].dtype in ['float64', 'int64'] or comparison_table[col].apply(lambda x: isinstance(x, (int, float))).all():
+                    averages[col] = comparison_table[col].mean()
+            except (TypeError, ValueError):
+                continue
+    
+    # Determine best overall approach
+    if averages:
+        best_overall = max(averages, key=averages.get)
+    else:
+        best_overall = "None"
+    
+    # Save results JSON
+    results_data = {
+        'selected_approaches': approaches,
+        'comparison_summary': {
+            'averages': averages,
+            'best_overall': best_overall
+        }
+    }
+    
+    # Add individual results
+    for approach in approaches:
+        if approach in results:
+            results_data[f'{approach}_results'] = results[approach]
+    
+    with open(f'{output_dir}/simple_benchmark_results.json', 'w') as f:
+        json.dump(results_data, f, indent=2)
+    
+    print(f"  - simple_benchmark_results.json")
+
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="RAGAS Benchmark: Compare RAG approaches",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python ragas_benchmark.py --all                    # Test all three approaches
+  python ragas_benchmark.py --chroma --graphrag      # Test ChromaDB vs GraphRAG only
+  python ragas_benchmark.py --chroma                 # Test ChromaDB only
+  python ragas_benchmark.py --text2cypher            # Test Text2Cypher only
+        """
+    )
+    
+    parser.add_argument(
+        '--all', 
+        action='store_true',
+        help='Test all three approaches (ChromaDB, GraphRAG, Text2Cypher)'
+    )
+    parser.add_argument(
+        '--chroma', 
+        action='store_true',
+        help='Include ChromaDB RAG in testing'
+    )
+    parser.add_argument(
+        '--graphrag', 
+        action='store_true',
+        help='Include GraphRAG in testing'
+    )
+    parser.add_argument(
+        '--text2cypher', 
+        action='store_true',
+        help='Include Text2Cypher in testing'
+    )
+    parser.add_argument(
+        '--output-dir',
+        default='benchmark_outputs',
+        help='Output directory for results (default: benchmark_outputs)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Determine which approaches to test
+    approaches = []
+    if args.all:
+        approaches = ['chroma', 'graphrag', 'text2cypher']
+    else:
+        if args.chroma:
+            approaches.append('chroma')
+        if args.graphrag:
+            approaches.append('graphrag')
+        if args.text2cypher:
+            approaches.append('text2cypher')
+    
+    # If no approaches specified, default to all
+    if not approaches:
+        print("⚠️  No approaches specified. Defaulting to all three approaches.")
+        approaches = ['chroma', 'graphrag', 'text2cypher']
+    
+    return approaches, args.output_dir
+
+def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs"):
+    """Main benchmarking function with selective approach testing"""
+    
+    approach_names = {
+        'chroma': 'ChromaDB RAG',
+        'graphrag': 'GraphRAG', 
+        'text2cypher': 'Text2Cypher'
+    }
+    
+    selected_names = [approach_names[approach] for approach in approaches]
+    
+    print(f"🚀 Starting Selective RAGAS Benchmark: {' vs '.join(selected_names)}")
+    print("=" * 80)
+    
+    # Load benchmark data
+    benchmark_data = load_benchmark_data()
+    
+    # Collect evaluation data for selected approaches
+    print(f"\n📋 Phase 1: Data Collection")
+    datasets = {}
+    for approach in approaches:
+        datasets[approach] = collect_evaluation_data_simple(benchmark_data, approach=approach)
+    
+    # Evaluate selected approaches with RAGAS
+    print(f"\n📊 Phase 2: RAGAS Evaluation")
+    results = {}
+    for approach in approaches:
+        results[approach] = evaluate_with_ragas_simple(datasets[approach], approach_names[approach])
+    
+    # Create comparison table for selected approaches
+    print(f"\n📈 Phase 3: Results Analysis")
+    
+    if len(approaches) == 1:
+        # Single approach - create simple results display
+        approach = approaches[0]
+        result = results[approach]
+        print(f"\n📊 Results for {approach_names[approach]}:")
+        print("-" * 50)
+        for metric, score in result.items():
+            print(f"{metric.replace('_', ' ').title()}: {score:.4f}")
+        
+        # Create simple comparison table
+        comparison_table = pd.DataFrame({
+            'Metric': [metric.replace('_', ' ').title() for metric in result.keys()],
+            approach_names[approach]: list(result.values())
+        })
+        
+    elif len(approaches) == 2:
+        # Two approaches - create comparison table
+        comparison_table = create_comparison_table_simple(
+            results[approaches[0]], 
+            results[approaches[1]]
+        )
+        # Rename columns to match selected approaches
+        comparison_table.columns = ['Metric', approach_names[approaches[0]], approach_names[approaches[1]], 'Improvement']
+        
+    else:
+        # Three approaches - create three-way comparison
+        comparison_table = create_three_way_comparison_table(
+            results['chroma'], 
+            results['graphrag'], 
+            results['text2cypher']
+        )
+    
+    # Display results
+    print(f"\n" + "=" * 90)
+    print(f"🏆 BENCHMARK RESULTS SUMMARY")
+    print("=" * 90)
+    print(comparison_table.to_string(index=False))
+    
+    # Calculate overall performance for selected approaches
+    print(f"\n📊 OVERALL PERFORMANCE SUMMARY:")
+    print("-" * 50)
+    
+    averages = {}
+    for col in comparison_table.columns:
+        if col != 'Metric' and col != 'Improvement':  # Skip non-numeric columns
+            try:
+                # Check if column contains numeric data
+                if comparison_table[col].dtype in ['float64', 'int64'] or comparison_table[col].apply(lambda x: isinstance(x, (int, float))).all():
+                    averages[col] = comparison_table[col].mean()
+                    print(f"{col} Average Score: {averages[col]:.4f}")
+            except (TypeError, ValueError):
+                print(f"⚠️  Skipping non-numeric column: {col}")
+                continue
+    
+    # Determine overall winner
+    if averages:
+        winner = max(averages, key=averages.get)
+        winner_score = averages[winner]
+        print(f"\n🏆 Overall Winner: {winner} (Score: {winner_score:.4f})")
+        
+        # Show improvements if multiple approaches
+        if len(approaches) > 1:
+            print(f"\n📈 Performance Comparisons:")
+            baseline = list(averages.values())[0]
+            baseline_name = list(averages.keys())[0]
+            
+            for name, score in averages.items():
+                if name != baseline_name:
+                    if score > baseline:
+                        improvement = ((score - baseline) / baseline) * 100
+                        print(f"📈 {name} vs {baseline_name}: +{improvement:.2f}%")
+                    else:
+                        decline = ((baseline - score) / baseline) * 100
+                        print(f"📉 {name} vs {baseline_name}: -{decline:.2f}%")
+    
+    # Save detailed results
+    print(f"\n💾 Phase 4: Saving Results")
+    save_results_selective(datasets, results, comparison_table, approaches, output_dir)
+    
+    # Generate visualizations
+    print(f"\n📊 Phase 5: Generating Visualizations")
+    create_visualizations(comparison_table)
+    
+    print(f"\n✅ BENCHMARK COMPLETE!")
+    print("=" * 80)
+    
+    return {
+        'approaches': approaches,
+        'results': results,
+        'comparison_table': comparison_table,
+        'datasets': datasets
+    }
+
 def main_simple():
-    """Main benchmarking function - three-way comparison"""
+    """Main benchmarking function - three-way comparison (legacy function)"""
     print("🚀 Starting Three-Way RAGAS Benchmark: ChromaDB vs GraphRAG vs Text2Cypher")
     print("=" * 80)
     
@@ -474,4 +715,8 @@ def main_simple():
     }
 
 if __name__ == "__main__":
-    results = main_simple() 
+    # Parse command line arguments
+    approaches, output_dir = parse_arguments()
+    
+    # Run selective benchmark
+    results = main_selective(approaches, output_dir) 

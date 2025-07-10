@@ -9,8 +9,6 @@ This script processes RFP documents by:
 """
 
 import os
-import re
-import spacy
 import json
 from pypdf import PdfReader
 from pathlib import Path
@@ -30,7 +28,6 @@ NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 
 class CustomGraphProcessor:
     def __init__(self):
-        self.nlp = spacy.load("en_core_web_sm")
         self.driver = neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         self.embeddings = OpenAIEmbeddings()
         self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -103,21 +100,21 @@ class CustomGraphProcessor:
         Extract entities from the following RFP document text. Return ONLY a valid JSON object with the following structure:
         
         {{
-            "organizations": [{{"text": "org name", "label": "ORG"}}],
-            "locations": [{{"text": "location name", "label": "GPE"}}],
-            "dates": [{{"text": "date/time", "label": "DATE"}}],
-            "persons": [{{"text": "person name", "label": "PERSON"}}],
-            "financial": [{{"text": "financial amount/term", "label": "MONEY"}}],
-            "requirements": [{{"text": "specific requirement", "label": "REQUIREMENT"}}]
+            "organizations": [{{"text": "org name", "description": "brief description of the organization", "label": "ORG"}}],
+            "locations": [{{"text": "location name", "description": "brief description of the location", "label": "GPE"}}],
+            "dates": [{{"text": "date/time", "description": "context of the date", "label": "DATE"}}],
+            "persons": [{{"text": "person name", "description": "role or title of the person", "label": "PERSON"}}],
+            "financial": [{{"text": "financial amount/term", "description": "context of the financial term", "label": "MONEY"}}],
+            "requirements": [{{"text": "specific requirement", "description": "brief description of the requirement", "label": "REQUIREMENT"}}]
         }}
         
         Guidelines:
-        - Organizations: Company names, institutions, government agencies
-        - Locations: Cities, states, countries, addresses
-        - Dates: Specific dates, timeframes, deadlines
-        - Persons: Individual names, titles, contact persons
-        - Financial: Dollar amounts, percentages, financial terms
-        - Requirements: Specific service requirements, capabilities needed, scope items (keep concise, max 50 chars each)
+        - Organizations: Company names, institutions, government agencies with their role/purpose
+        - Locations: Cities, states, countries, addresses with context
+        - Dates: Specific dates, timeframes, deadlines with their significance
+        - Persons: Individual names, titles, contact persons with their role
+        - Financial: Dollar amounts, percentages, financial terms with context
+        - Requirements: Specific service requirements, capabilities needed, scope items (keep concise, max 50 chars each) with brief description
         
         Text to analyze:
         {text[:3000]}  # Limit to first 3000 chars to avoid token limits
@@ -125,71 +122,47 @@ class CustomGraphProcessor:
         Return only the JSON object, no other text.
         """
         
+        # Get response from GPT-4o-mini
+        response = self.llm.invoke(prompt)
+        response_text = response.content.strip()
+        
+        # Try to extract JSON from response
+        if response_text.startswith('```json'):
+            response_text = response_text[7:-3]  # Remove ```json and ```
+        elif response_text.startswith('```'):
+            response_text = response_text[3:-3]  # Remove ``` and ```
+        
+        # Clean up any extra text before/after JSON
+        response_text = response_text.strip()
+        
+        # Parse JSON response
         try:
-            # Get response from GPT-4o-mini
-            response = self.llm.invoke(prompt)
-            response_text = response.content.strip()
-            
-            # Try to extract JSON from response
-            if response_text.startswith('```json'):
-                response_text = response_text[7:-3]  # Remove ```json and ```
-            elif response_text.startswith('```'):
-                response_text = response_text[3:-3]  # Remove ``` and ```
-            
-            # Clean up any extra text before/after JSON
-            response_text = response_text.strip()
-            
-            # Parse JSON response
-            try:
-                extracted_entities = json.loads(response_text)
-            except json.JSONDecodeError as json_error:
-                print(f"JSON parsing error: {json_error}")
-                print(f"Response text: {response_text[:200]}...")
-                raise
-            
-            # Validate and clean the extracted entities
-            for entity_type, entity_list in extracted_entities.items():
-                if entity_type in entities and isinstance(entity_list, list):
-                    for entity in entity_list:
-                        if isinstance(entity, dict) and 'text' in entity:
-                            # Clean and validate entity text
-                            entity_text = entity['text'].strip()
-                            if entity_text and len(entity_text) <= 200:  # Reasonable length limit
-                                entity_info = {
-                                    'text': entity_text,
-                                    'label': entity.get('label', entity_type.upper()),
-                                    'start': 0,  # We don't have exact positions from GPT
-                                    'end': len(entity_text)
-                                }
-                                entities[entity_type].append(entity_info)
-            
-            print(f"✅ Extracted {sum(len(entities[et]) for et in entities)} entities using GPT-4o-mini")
-            
-        except Exception as e:
-            print(f"❌ Error extracting entities with GPT-4o-mini: {e}")
-            print("Falling back to spaCy extraction...")
-            
-            # Fallback to spaCy extraction
-            doc = self.nlp(text)
-            
-            for ent in doc.ents:
-                entity_info = {
-                    'text': ent.text.strip(),
-                    'label': ent.label_,
-                    'start': ent.start_char,
-                    'end': ent.end_char
-                }
-                
-                if ent.label_ in ["ORG"]:
-                    entities['organizations'].append(entity_info)
-                elif ent.label_ in ["GPE", "LOC"]:
-                    entities['locations'].append(entity_info)
-                elif ent.label_ in ["DATE", "TIME"]:
-                    entities['dates'].append(entity_info)
-                elif ent.label_ in ["PERSON"]:
-                    entities['persons'].append(entity_info)
-                elif ent.label_ in ["MONEY", "PERCENT", "QUANTITY"]:
-                    entities['financial'].append(entity_info)
+            extracted_entities = json.loads(response_text)
+        except json.JSONDecodeError as json_error:
+            print(f"JSON parsing error: {json_error}")
+            print(f"Response text: {response_text[:200]}...")
+            raise
+        
+        # Validate and clean the extracted entities
+        for entity_type, entity_list in extracted_entities.items():
+            if entity_type in entities and isinstance(entity_list, list):
+                for entity in entity_list:
+                    if isinstance(entity, dict) and 'text' in entity:
+                        # Clean and validate entity text
+                        entity_text = entity['text'].strip()
+                        entity_description = entity.get('description', '').strip()
+                        
+                        if entity_text and len(entity_text) <= 200:  # Reasonable length limit
+                            entity_info = {
+                                'text': entity_text,
+                                'description': entity_description,
+                                'label': entity.get('label', entity_type.upper()),
+                                'start': 0,  # We don't have exact positions from GPT
+                                'end': len(entity_text)
+                            }
+                            entities[entity_type].append(entity_info)
+        
+        print(f"✅ Extracted {sum(len(entities[et]) for et in entities)} entities using GPT-4o-mini")
         
         return entities
     
@@ -386,80 +359,104 @@ class CustomGraphProcessor:
                 # Create entity nodes with embeddings and HAS_ENTITY relationships
                 for org in entities['organizations']:
                     org_name = org['text']
-                    org_embedding = self.create_embedding(org_name)
+                    org_description = org.get('description', '')
+                    # Create embedding from both name and description
+                    embedding_text = f"{org_name}: {org_description}" if org_description else org_name
+                    org_embedding = self.create_embedding(embedding_text)
                     session.run("""
                         MERGE (o:Organization {name: $name})
-                        ON CREATE SET o.embedding = $embedding
-                        ON MATCH SET o.embedding = CASE WHEN o.embedding IS NULL THEN $embedding ELSE o.embedding END
+                        ON CREATE SET o.description = $description, o.embedding = $embedding
+                        ON MATCH SET o.description = CASE WHEN o.description IS NULL THEN $description ELSE o.description END,
+                                   o.embedding = CASE WHEN o.embedding IS NULL THEN $embedding ELSE o.embedding END
                         WITH o
                         MATCH (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(o)
-                    """, name=org_name, embedding=org_embedding, chunk_id=chunk_id)
+                    """, name=org_name, description=org_description, embedding=org_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Organization', org_name))
                 
                 for loc in entities['locations']:
                     loc_name = loc['text']
-                    loc_embedding = self.create_embedding(loc_name)
+                    loc_description = loc.get('description', '')
+                    # Create embedding from both name and description
+                    embedding_text = f"{loc_name}: {loc_description}" if loc_description else loc_name
+                    loc_embedding = self.create_embedding(embedding_text)
                     session.run("""
                         MERGE (l:Location {name: $name})
-                        ON CREATE SET l.embedding = $embedding
-                        ON MATCH SET l.embedding = CASE WHEN l.embedding IS NULL THEN $embedding ELSE l.embedding END
+                        ON CREATE SET l.description = $description, l.embedding = $embedding
+                        ON MATCH SET l.description = CASE WHEN l.description IS NULL THEN $description ELSE l.description END,
+                                   l.embedding = CASE WHEN l.embedding IS NULL THEN $embedding ELSE l.embedding END
                         WITH l
                         MATCH (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(l)
-                    """, name=loc_name, embedding=loc_embedding, chunk_id=chunk_id)
+                    """, name=loc_name, description=loc_description, embedding=loc_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Location', loc_name))
                 
                 for date in entities['dates']:
                     date_name = date['text']
-                    date_embedding = self.create_embedding(date_name)
+                    date_description = date.get('description', '')
+                    # Create embedding from both name and description
+                    embedding_text = f"{date_name}: {date_description}" if date_description else date_name
+                    date_embedding = self.create_embedding(embedding_text)
                     session.run("""
                         MERGE (dt:Date {name: $name})
-                        ON CREATE SET dt.embedding = $embedding
-                        ON MATCH SET dt.embedding = CASE WHEN dt.embedding IS NULL THEN $embedding ELSE dt.embedding END
+                        ON CREATE SET dt.description = $description, dt.embedding = $embedding
+                        ON MATCH SET dt.description = CASE WHEN dt.description IS NULL THEN $description ELSE dt.description END,
+                                   dt.embedding = CASE WHEN dt.embedding IS NULL THEN $embedding ELSE dt.embedding END
                         WITH dt
                         MATCH (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(dt)
-                    """, name=date_name, embedding=date_embedding, chunk_id=chunk_id)
+                    """, name=date_name, description=date_description, embedding=date_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Date', date_name))
                 
                 for req in entities['requirements']:
                     req_name = req['text']  # GPT-4o-mini already provides concise requirements
-                    req_embedding = self.create_embedding(req_name)
+                    req_description = req.get('description', '')
+                    # Create embedding from both name and description
+                    embedding_text = f"{req_name}: {req_description}" if req_description else req_name
+                    req_embedding = self.create_embedding(embedding_text)
                     session.run("""
                         MERGE (r:Requirement {name: $name})
-                        ON CREATE SET r.embedding = $embedding
-                        ON MATCH SET r.embedding = CASE WHEN r.embedding IS NULL THEN $embedding ELSE r.embedding END
+                        ON CREATE SET r.description = $description, r.embedding = $embedding
+                        ON MATCH SET r.description = CASE WHEN r.description IS NULL THEN $description ELSE r.description END,
+                                   r.embedding = CASE WHEN r.embedding IS NULL THEN $embedding ELSE r.embedding END
                         WITH r
                         MATCH (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(r)
-                    """, name=req_name, embedding=req_embedding, chunk_id=chunk_id)
+                    """, name=req_name, description=req_description, embedding=req_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Requirement', req_name))
                 
                 for person in entities['persons']:
                     person_name = person['text']
-                    person_embedding = self.create_embedding(person_name)
+                    person_description = person.get('description', '')
+                    # Create embedding from both name and description
+                    embedding_text = f"{person_name}: {person_description}" if person_description else person_name
+                    person_embedding = self.create_embedding(embedding_text)
                     session.run("""
                         MERGE (p:Person {name: $name})
-                        ON CREATE SET p.embedding = $embedding
-                        ON MATCH SET p.embedding = CASE WHEN p.embedding IS NULL THEN $embedding ELSE p.embedding END
+                        ON CREATE SET p.description = $description, p.embedding = $embedding
+                        ON MATCH SET p.description = CASE WHEN p.description IS NULL THEN $description ELSE p.description END,
+                                   p.embedding = CASE WHEN p.embedding IS NULL THEN $embedding ELSE p.embedding END
                         WITH p
                         MATCH (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(p)
-                    """, name=person_name, embedding=person_embedding, chunk_id=chunk_id)
+                    """, name=person_name, description=person_description, embedding=person_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Person', person_name))
                 
                 for financial in entities['financial']:
                     financial_name = financial['text']
-                    financial_embedding = self.create_embedding(financial_name)
+                    financial_description = financial.get('description', '')
+                    # Create embedding from both name and description
+                    embedding_text = f"{financial_name}: {financial_description}" if financial_description else financial_name
+                    financial_embedding = self.create_embedding(embedding_text)
                     session.run("""
                         MERGE (f:Financial {name: $name})
-                        ON CREATE SET f.embedding = $embedding
-                        ON MATCH SET f.embedding = CASE WHEN f.embedding IS NULL THEN $embedding ELSE f.embedding END
+                        ON CREATE SET f.description = $description, f.embedding = $embedding
+                        ON MATCH SET f.description = CASE WHEN f.description IS NULL THEN $description ELSE f.description END,
+                                   f.embedding = CASE WHEN f.embedding IS NULL THEN $embedding ELSE f.embedding END
                         WITH f
                         MATCH (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(f)
-                    """, name=financial_name, embedding=financial_embedding, chunk_id=chunk_id)
+                    """, name=financial_name, description=financial_description, embedding=financial_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Financial', financial_name))
                 
                 # Create RELATES_TO relationships between entities in the same chunk

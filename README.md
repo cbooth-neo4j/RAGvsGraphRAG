@@ -96,12 +96,6 @@ python benchmark/ragas_benchmark.py
 - Direct graph database querying
 - Few-shot examples for query generation
 
-### Graph Processing (`graph_processor.py`)
-- Extracts entities from documents using LLMs
-- Creates knowledge graph in Neo4j
-- Establishes entity relationships based on co-occurrence
-- Supports entity types: Organization, Person, Location, Date, Requirement, Financial
-
 ### Benchmark Framework (`benchmark/`)
 - Three-way RAGAS evaluation using GPT-4o-mini as evaluator
 - Measures Context Recall, Faithfulness, and Factual Correctness

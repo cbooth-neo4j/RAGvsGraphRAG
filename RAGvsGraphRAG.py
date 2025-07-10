@@ -162,11 +162,9 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
         # Generate query vector
         query_vector = embeddings.embed_query(query)
         
-        # Query parameters for the safe Neo4j pattern
+        # Query parameters for the simplified pattern
         query_params = {
-            'query_vector': query_vector,
-            'embedding_match_min': 0.4, 
-            'embedding_match_max': 0.9   
+            'query_vector': query_vector
         }
         
         try:
@@ -237,98 +235,39 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
             chunk_ids = [chunk_id for chunk_id, _ in chunks_with_scores]
             chunk_scores = {chunk_id: score for chunk_id, score in chunks_with_scores}
             
-            # Updated Cypher query with Neo4j safe pattern to prevent chunk cross-contamination
+            # Simplified Cypher query following the specified structure
             cypher_query = """
             UNWIND $chunk_data AS chunk_item
-            MATCH (chunk:Chunk {id: chunk_item.chunk_id})
+            MATCH (chunk:Chunk {id: chunk_item.chunk_id})-[:PART_OF]->(d:Document)
             
-            // Find the document of the chunk
-            MATCH (chunk)-[:PART_OF]->(d:Document)
-            
-            // Get entities from chunks with frequency prioritization
-            CALL (chunk) {
+            CALL {
                 WITH chunk
-                OPTIONAL MATCH (chunk)-[:HAS_ENTITY]->(e)
-                WITH e, count(*) AS numChunks
-                WHERE e IS NOT NULL
-                ORDER BY numChunks DESC
-                LIMIT 20  // Limit entities like Neo4j example
+                MATCH (chunk)-[:HAS_ENTITY]->(e)
+                MATCH path=(e)(()-[rels:!HAS_ENTITY&!PART_OF]-()){0,2}(:!Chunk&!Document)
                 
-                WITH e, $query_vector as query_vector,
-                     $embedding_match_min as embedding_match_min,
-                     $embedding_match_max as embedding_match_max
-                
-                // Apply safe traversal pattern based on embedding similarity
-                WITH
-                CASE
-                    // Low/medium similarity: 1-hop traversal with safety constraints
-                    WHEN e.embedding IS NULL OR 
-                         (embedding_match_min <= vector.similarity.cosine(query_vector, e.embedding) 
-                          AND vector.similarity.cosine(query_vector, e.embedding) <= embedding_match_max) THEN
-                        collect {
-                            OPTIONAL MATCH path=(e)(()-[rels:!HAS_ENTITY&!PART_OF]-()){0,1}(:!Chunk&!Document)
-                            RETURN path LIMIT 10
-                        }
-                    // High similarity: 2-hop traversal with safety constraints  
-                    WHEN e.embedding IS NOT NULL AND 
-                         vector.similarity.cosine(query_vector, e.embedding) > embedding_match_max THEN
-                        collect {
-                            OPTIONAL MATCH path=(e)(()-[rels:!HAS_ENTITY&!PART_OF]-()){0,2}(:!Chunk&!Document)
-                            RETURN path LIMIT 20
-                        }
-                    // Fallback: just the entity itself
-                    ELSE
-                        collect {
-                            MATCH path=(e)
-                            RETURN path
-                        }
-                END AS paths, e
-                
-                // Flatten and deduplicate paths
-                WITH apoc.coll.toSet(apoc.coll.flatten(collect(DISTINCT paths))) AS paths,
-                     collect(DISTINCT e) AS entities
-                
-                // Extract nodes and relationships safely
-                RETURN
-                    collect {
-                        UNWIND paths AS p
-                        UNWIND relationships(p) AS r
-                        RETURN DISTINCT r
-                    } AS rels,
-                    collect {
-                        UNWIND paths AS p  
-                        UNWIND nodes(p) AS n
-                        RETURN DISTINCT n
-                    } AS nodes,
-                    entities
+                RETURN collect(DISTINCT e) AS entities,
+                       collect(DISTINCT path) AS paths
             }
             
-            // Build enhanced content with entity context
-            WITH d, chunk, chunk_item.score as score, entities, nodes, rels,
+            WITH d, chunk, chunk_item.score as score, entities, paths
+            WITH d, chunk, score, entities,
                  [e IN entities | e.name] AS entity_names,
-                 [n IN nodes WHERE n.name IS NOT NULL | n.name] AS related_names
+                 [path IN paths | [node IN nodes(path) WHERE node.name IS NOT NULL | node.name]] AS path_names
             
-            // Structured output of clear separation of content types
-            WITH d,
-                 score,
-                 "Text Content:\\n" + chunk.text + 
-                 CASE WHEN size(entity_names) > 0 THEN "\\n\\nEntities:\\n" + apoc.text.join(entity_names, ", ") ELSE "" END +
-                 CASE WHEN size(related_names) > 0 THEN "\\n\\nRelated Context:\\n" + apoc.text.join(related_names, ", ") ELSE "" END
-                 as enhanced_text,
-                 collect({id: chunk.id, score: score}) as chunk_details,
-                 [n IN nodes WHERE n.name IS NOT NULL | elementId(n)] AS entity_ids,
-                 [r IN rels | elementId(r)] AS rel_ids
+            WITH d, chunk, score, entities, entity_names,
+                 apoc.coll.toSet(apoc.coll.flatten(path_names)) AS related_names
             
             RETURN
-               enhanced_text as text,
+               chunk.text as text,
                score as score,
                {
-                   length: size(enhanced_text),
-                   source: d.name,
-                   chunkdetails: chunk_details,
+                   chunk_id: chunk.id,
+                   chunk_text_preview: substring(chunk.text, 0, 100) + "...",
+                   document_source: d.name,
+                   chunk_length: size(chunk.text),
                    entities: {
-                       entityids: entity_ids,
-                       relationshipids: rel_ids
+                       entitynames: entity_names,
+                       relatednames: related_names
                    }
                } AS metadata
             """
@@ -362,26 +301,36 @@ def query_neo4j_with_llm(query: str, k: int = 3) -> Dict[str, Any]:
                     'metadata': metadata
                 })
             
-            print(f"✅ GraphRAG retrieved {len(enhanced_chunks)} enhanced chunks")
+            print(f"✅ GraphRAG retrieved {len(enhanced_chunks)} chunks")
+            
+            # Log detailed chunk information
+            for i, detail in enumerate(retrieval_details, 1):
+                metadata = detail.get('metadata', {})
+                print(f"  📄 Chunk {i}:")
+                print(f"    - ID: {metadata.get('chunk_id', 'N/A')}")
+                print(f"    - Preview: {metadata.get('chunk_text_preview', 'N/A')}")
+                print(f"    - Document: {metadata.get('document_source', 'N/A')}")
+                print(f"    - Score: {detail.get('score', 'N/A')}")
+                print(f"    - Entities: {metadata.get('entities', {}).get('entitynames', [])}")
             
             if not enhanced_chunks:
                 return {
                     'method': 'GraphRAG + LLM',
                     'query': query,
-                    'final_answer': 'No enhanced results found after entity processing.',
+                    'final_answer': 'No results found after entity processing.',
                     'retrieved_chunks': 0,
                     'retrieval_details': []
                 }
             
-            # Prepare context for LLM with enhanced chunks
+            # Prepare context for LLM with retrieved chunks
             context_parts = []
             for i, chunk in enumerate(enhanced_chunks, 1):
-                context_parts.append(f"Enhanced Document {i}:\n{chunk}")
+                context_parts.append(f"Document {i}:\n{chunk}")
             
             context = "\n\n".join(context_parts)
             
             # Generate LLM response with GraphRAG context
-            prompt = f"""Based on the following retrieved documents, provide a factual answer using ONLY the information in the Text Content sections. The Entities and Related Context sections provide additional context but should not be treated as factual sources.
+            prompt = f"""Based on the following retrieved documents, provide a factual answer to the question.
 
 Question: {query}
 
@@ -389,13 +338,11 @@ Retrieved Documents:
 {context}
 
 Instructions:
-1. Base your answer strictly on the Text Content sections of the documents
-2. You may combine information from multiple Text Content sections if they are related
-3. Use the Entities sections to understand key topics mentioned
-4. Use the Related Context sections only for background understanding
-5. If the Text Content sections don't contain enough information to answer the question completely, state this clearly
-6. Do not make inferences beyond what is explicitly stated in the Text Content sections
-7. When combining information from multiple documents, ensure accuracy and avoid mixing unrelated facts
+1. Base your answer strictly on the information in the retrieved documents
+2. You may combine information from multiple documents if they are related
+3. If the documents don't contain enough information to answer the question completely, state this clearly
+4. Do not make inferences beyond what is explicitly stated in the documents
+5. When combining information from multiple documents, ensure accuracy and avoid mixing unrelated facts
 
 Please provide a factual, well-structured response."""
 

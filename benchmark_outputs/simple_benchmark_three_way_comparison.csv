@@ -1,4 +1,0 @@
-Metric,ChromaDB RAG,GraphRAG,Text2Cypher
-Context Recall,0.4,0.525,0.25
-Faithfulness,0.7964,0.6967,0.3993
-Factual Correctness,0.285,0.3505,0.136
