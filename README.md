@@ -83,13 +83,14 @@ python benchmark/ragas_benchmark.py
 - Simple document chunk retrieval
 
 #### GraphRAG
+- [GraphRAG Field Guide](https://neo4j.com/blog/developer/graphrag-field-guide-rag-patterns/)
 - Neo4j Graph-Enchanced Vector Search
 - Enhanced context through entity traversal
 - Safe graph traversal preventing chunk cross-contamination
 
 #### Text2Cypher
-https://neo4j.com/blog/developer/effortless-rag-text2cypherretriever/
-https://github.com/neo4j/rag-evaluation/blob/main/scripts/run_experiment_from_config_file.py
+- [Text2Cypher Blog Post](https://neo4j.com/blog/developer/effortless-rag-text2cypherretriever/)
+- [Text2Cypher Implementation](https://github.com/neo4j/rag-evaluation/blob/main/scripts/run_experiment_from_config_file.py)
 
 - Natural language to Cypher query translation
 - Direct graph database querying
@@ -107,19 +108,6 @@ https://github.com/neo4j/rag-evaluation/blob/main/scripts/run_experiment_from_co
 - Automated professional visualizations (bar charts, heatmaps, pie charts)
 - Organized results in `benchmark_outputs/` folder
 
-## 🔧 Key Optimizations
-
-### GraphRAG Improvements
-1. **Safe Entity Traversal**: Prevents retrieval of other document chunks
-2. **Entity Prioritization**: Limits to top 20 entities by frequency
-3. **Embedding-Based Traversal**: Uses cosine similarity for relevance
-4. **Structured Context**: Separates factual content from related context
-
-### Performance Tuning
-- Optimal k=3 retrieval for balanced performance
-- Similarity thresholds: min=0.4, max=0.9
-- Path limits: 10 (1-hop), 20 (2-hop)
-- Entity limit: 20 per chunk
 
 ## 📈 Evaluation Metrics
 
@@ -142,19 +130,11 @@ https://github.com/neo4j/rag-evaluation/blob/main/scripts/run_experiment_from_co
 2. Run `python pdf_processor.py`
 3. Run `python graph_processor.py`
 
-### Testing Changes
-```bash
-# Quick validation (3 questions)
-python tests/test_ragas_setup.py
-
-# Full benchmark (20 questions)  
-python benchmark/ragas_benchmark.py
-```
-
-### Modifying Evaluation
+### Implementing into your own data & modifying Evaluation
 - Edit `benchmark/benchmark.csv` to add/modify test questions
 - Adjust metrics in `benchmark/ragas_benchmark.py`
-- Update entity types in `graph_processor.py`
+- Update nodes, relationships and entity types in `graph_processor.py`
+- Modify cypher_retriever in `RAGvsGraphRAG.py`
 
 ## 📚 Documentation
 
