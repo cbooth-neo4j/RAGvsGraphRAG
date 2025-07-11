@@ -6,17 +6,24 @@ This script processes RFP documents by:
 2. Creating embeddings with OpenAI
 3. Extracting entities with spaCy
 4. Building a proper graph schema in Neo4j
+5. Performing entity resolution to merge similar entities
 """
 
 import os
 import json
 from pypdf import PdfReader
 from pathlib import Path
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 from dotenv import load_dotenv
 import neo4j
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from graphdatascience import GraphDataScience
+from pydantic import BaseModel, Field
+from langchain_core.prompts import ChatPromptTemplate
+from retry import retry
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +32,16 @@ load_dotenv()
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
+
+class DuplicateEntities(BaseModel):
+    entities: List[str] = Field(
+        description="Entities that represent the same object or real-world entity and should be merged"
+    )
+
+class Disambiguate(BaseModel):
+    merge_entities: Optional[List[DuplicateEntities]] = Field(
+        description="Lists of entities that represent the same object or real-world entity and should be merged"
+    )
 
 class CustomGraphProcessor:
     def __init__(self):
@@ -37,6 +54,34 @@ class CustomGraphProcessor:
             length_function=len,
             separators=["\n\n", "\n", " ", ""]
         )
+        
+        # Entity resolution components
+        self.gds = GraphDataScience(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        self.extraction_llm = ChatOpenAI(model_name="gpt-4o").with_structured_output(Disambiguate)
+        
+        # Entity resolution prompt
+        system_prompt = """You are a data processing assistant. Your task is to identify duplicate entities in a list and decide which of them should be merged.
+The entities might be slightly different in format or content, but essentially refer to the same thing. Use your analytical skills to determine duplicates.
+
+Here are the rules for identifying duplicates:
+1. Entities with minor typographical differences should be considered duplicates.
+2. Entities with different formats but the same content should be considered duplicates.
+3. Entities that refer to the same real-world object or concept, even if described differently, should be considered duplicates.
+4. If it refers to different numbers, dates, or products, do not merge results
+"""
+        user_template = """
+Here is the list of entities to process:
+{entities}
+
+Please identify duplicates, merge them, and provide the merged list.
+"""
+        
+        self.extraction_prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", user_template),
+        ])
+        
+        self.extraction_chain = self.extraction_prompt | self.extraction_llm
         
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         """Extract text from PDF file"""
@@ -172,8 +217,9 @@ class CustomGraphProcessor:
         self.clear_database()
         
         with self.driver.session() as session:
-            # Create constraints for unique entities
+            # Create constraints for unique entities - including __Entity__ for resolution
             constraints = [
+                "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:__Entity__) REQUIRE e.id IS UNIQUE",
                 "CREATE CONSTRAINT org_name IF NOT EXISTS FOR (o:Organization) REQUIRE o.name IS UNIQUE",
                 "CREATE CONSTRAINT loc_name IF NOT EXISTS FOR (l:Location) REQUIRE l.name IS UNIQUE", 
                 "CREATE CONSTRAINT req_name IF NOT EXISTS FOR (r:Requirement) REQUIRE r.name IS UNIQUE",
@@ -192,6 +238,16 @@ class CustomGraphProcessor:
             
             # Create vector indexes for embeddings
             vector_indexes = [
+                """
+                CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
+                FOR (e:__Entity__) ON (e.embedding)
+                OPTIONS {
+                    indexConfig: {
+                        `vector.dimensions`: 1536,
+                        `vector.similarity_function`: 'cosine'
+                    }
+                }
+                """,
                 """
                 CREATE VECTOR INDEX chunk_embedding IF NOT EXISTS
                 FOR (c:Chunk) ON (c.embedding)
@@ -369,7 +425,7 @@ class CustomGraphProcessor:
                         ON MATCH SET o.description = CASE WHEN o.description IS NULL THEN $description ELSE o.description END,
                                    o.embedding = CASE WHEN o.embedding IS NULL THEN $embedding ELSE o.embedding END
                         WITH o
-                        MATCH (c:Chunk {id: $chunk_id})
+                        MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(o)
                     """, name=org_name, description=org_description, embedding=org_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Organization', org_name))
@@ -386,7 +442,7 @@ class CustomGraphProcessor:
                         ON MATCH SET l.description = CASE WHEN l.description IS NULL THEN $description ELSE l.description END,
                                    l.embedding = CASE WHEN l.embedding IS NULL THEN $embedding ELSE l.embedding END
                         WITH l
-                        MATCH (c:Chunk {id: $chunk_id})
+                        MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(l)
                     """, name=loc_name, description=loc_description, embedding=loc_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Location', loc_name))
@@ -403,7 +459,7 @@ class CustomGraphProcessor:
                         ON MATCH SET dt.description = CASE WHEN dt.description IS NULL THEN $description ELSE dt.description END,
                                    dt.embedding = CASE WHEN dt.embedding IS NULL THEN $embedding ELSE dt.embedding END
                         WITH dt
-                        MATCH (c:Chunk {id: $chunk_id})
+                        MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(dt)
                     """, name=date_name, description=date_description, embedding=date_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Date', date_name))
@@ -420,7 +476,7 @@ class CustomGraphProcessor:
                         ON MATCH SET r.description = CASE WHEN r.description IS NULL THEN $description ELSE r.description END,
                                    r.embedding = CASE WHEN r.embedding IS NULL THEN $embedding ELSE r.embedding END
                         WITH r
-                        MATCH (c:Chunk {id: $chunk_id})
+                        MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(r)
                     """, name=req_name, description=req_description, embedding=req_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Requirement', req_name))
@@ -437,7 +493,7 @@ class CustomGraphProcessor:
                         ON MATCH SET p.description = CASE WHEN p.description IS NULL THEN $description ELSE p.description END,
                                    p.embedding = CASE WHEN p.embedding IS NULL THEN $embedding ELSE p.embedding END
                         WITH p
-                        MATCH (c:Chunk {id: $chunk_id})
+                        MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(p)
                     """, name=person_name, description=person_description, embedding=person_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Person', person_name))
@@ -454,7 +510,7 @@ class CustomGraphProcessor:
                         ON MATCH SET f.description = CASE WHEN f.description IS NULL THEN $description ELSE f.description END,
                                    f.embedding = CASE WHEN f.embedding IS NULL THEN $embedding ELSE f.embedding END
                         WITH f
-                        MATCH (c:Chunk {id: $chunk_id})
+                        MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(f)
                     """, name=financial_name, description=financial_description, embedding=financial_embedding, chunk_id=chunk_id)
                     chunk_entity_ids.append(('Financial', financial_name))
@@ -468,8 +524,8 @@ class CustomGraphProcessor:
             'status': 'success'
         }
     
-    def process_directory(self, pdf_dir: str) -> Dict[str, Any]:
-        """Process all PDFs in a directory"""
+    def process_directory(self, pdf_dir: str, perform_resolution: bool = True) -> Dict[str, Any]:
+        """Process all PDFs in a directory and optionally perform entity resolution"""
         results = {}
         pdf_files = list(Path(pdf_dir).glob("*.pdf"))
         
@@ -488,11 +544,189 @@ class CustomGraphProcessor:
                 print(f"❌ Error processing {pdf_path.name}: {e}")
                 results[pdf_path.name] = {'status': 'error', 'error': str(e)}
         
+        # Perform entity resolution if requested
+        if perform_resolution:
+            try:
+                self.perform_entity_resolution()
+                print("✅ Entity resolution completed")
+            except Exception as e:
+                print(f"❌ Error during entity resolution: {e}")
+        
         return results
     
     def close(self):
         """Close database connection"""
         self.driver.close()
+    
+    @retry(tries=3, delay=2)
+    def entity_resolution(self, entities: List[str]) -> Optional[List[str]]:
+        """Use LLM to determine which entities should be merged"""
+        try:
+            result = self.extraction_chain.invoke({"entities": entities})
+            if result.merge_entities:
+                return [el.entities for el in result.merge_entities]
+            return None
+        except Exception as e:
+            print(f"Error in entity resolution: {e}")
+            return None
+
+    def perform_entity_resolution(self, similarity_threshold: float = 0.95, word_edit_distance: int = 3, max_workers: int = 4):
+        """Perform entity resolution using k-nearest neighbors and LLM evaluation"""
+        print("\n" + "="*60)
+        print("STARTING ENTITY RESOLUTION")
+        print("="*60)
+        
+        with self.driver.session() as session:
+            # Check if we have any entities
+            entity_count = session.run("MATCH (e:__Entity__) RETURN count(e) as count").single()['count']
+            if entity_count == 0:
+                print("No entities found for resolution")
+                return
+                
+            print(f"Found {entity_count} entities to process")
+        
+        try:
+            # Step 1: Create vector embeddings for existing entities (already done during creation)
+            print("Step 1: Using existing embeddings for entities")
+            
+            # Step 2: Project graph for GDS
+            print("Step 2: Creating graph projection")
+            try:
+                # Drop existing projection if it exists
+                try:
+                    self.gds.graph.drop("entities")
+                except:
+                    pass
+                
+                G, result = self.gds.graph.project(
+                    "entities",                   # Graph name
+                    "__Entity__",                 # Node projection
+                    "*",                          # Relationship projection
+                    nodeProperties=["embedding"]  # Configuration parameters
+                )
+                print(f"Graph projected with {G.node_count()} nodes")
+                
+            except Exception as e:
+                print(f"Error creating graph projection: {e}")
+                return
+            
+            # Step 3: Create k-nearest neighbor relationships
+            print("Step 3: Creating k-nearest neighbor relationships")
+            try:
+                self.gds.knn.mutate(
+                    G,
+                    nodeProperties=['embedding'],
+                    mutateRelationshipType='SIMILAR',
+                    mutateProperty='score',
+                    similarityCutoff=similarity_threshold
+                )
+                print(f"KNN relationships created with similarity threshold {similarity_threshold}")
+            except Exception as e:
+                print(f"Error creating KNN relationships: {e}")
+                return
+            
+            # Step 4: Find weakly connected components
+            print("Step 4: Finding weakly connected components")
+            try:
+                self.gds.wcc.write(
+                    G,
+                    writeProperty="wcc",
+                    relationshipTypes=["SIMILAR"]
+                )
+                print("Weakly connected components identified")
+            except Exception as e:
+                print(f"Error finding components: {e}")
+                return
+            
+            # Step 5: Find potential duplicate candidates with word distance filtering
+            print("Step 5: Finding potential duplicate candidates")
+            with self.driver.session() as session:
+                potential_duplicate_candidates = session.run("""
+                    MATCH (e:`__Entity__`)
+                    WHERE size(e.id) > 4 // longer than 4 characters
+                    WITH e.wcc AS community, collect(e) AS nodes, count(*) AS count
+                    WHERE count > 1
+                    UNWIND nodes AS node
+                    // Add text distance
+                    WITH distinct
+                      [n IN nodes WHERE apoc.text.distance(toLower(node.id), toLower(n.id)) < $distance | n.id] AS intermediate_results
+                    WHERE size(intermediate_results) > 1
+                    WITH collect(intermediate_results) AS results
+                    // combine groups together if they share elements
+                    UNWIND range(0, size(results)-1, 1) as index
+                    WITH results, index, results[index] as result
+                    WITH apoc.coll.sort(reduce(acc = result, index2 IN range(0, size(results)-1, 1) |
+                            CASE WHEN index <> index2 AND
+                                size(apoc.coll.intersection(acc, results[index2])) > 0
+                                THEN apoc.coll.union(acc, results[index2])
+                                ELSE acc
+                            END
+                    )) as combinedResult
+                    WITH distinct(combinedResult) as combinedResult
+                    // extra filtering
+                    WITH collect(combinedResult) as allCombinedResults
+                    UNWIND range(0, size(allCombinedResults)-1, 1) as combinedResultIndex
+                    WITH allCombinedResults[combinedResultIndex] as combinedResult, combinedResultIndex, allCombinedResults
+                    WHERE NOT any(x IN range(0,size(allCombinedResults)-1,1)
+                        WHERE x <> combinedResultIndex
+                        AND apoc.coll.containsAll(allCombinedResults[x], combinedResult)
+                    )
+                    RETURN combinedResult
+                """, distance=word_edit_distance).data()
+                
+                print(f"Found {len(potential_duplicate_candidates)} groups of potential duplicates")
+                
+                # Step 6: Use LLM to evaluate and merge entities
+                print("Step 6: Using LLM to evaluate entity merges")
+                merged_entities = []
+                
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Submitting all tasks and creating a list of future objects
+                    futures = [
+                        executor.submit(self.entity_resolution, el['combinedResult'])
+                        for el in potential_duplicate_candidates
+                    ]
+
+                    for future in tqdm(
+                        as_completed(futures), total=len(futures), desc="Processing entity groups"
+                    ):
+                        to_merge = future.result()
+                        if to_merge:
+                            merged_entities.extend(to_merge)
+                
+                print(f"LLM identified {len(merged_entities)} groups for merging")
+                
+                # Step 7: Perform the actual merges
+                if merged_entities:
+                    print("Step 7: Performing entity merges")
+                    merge_result = session.run("""
+                        UNWIND $data AS candidates
+                        CALL {
+                          WITH candidates
+                          MATCH (e:__Entity__) WHERE e.id IN candidates
+                          RETURN collect(e) AS nodes
+                        }
+                        CALL apoc.refactor.mergeNodes(nodes, {properties: {
+                            `.*`: 'discard'
+                        }})
+                        YIELD node
+                        RETURN count(*) as merged_count
+                    """, data=merged_entities).single()
+                    
+                    print(f"Successfully merged {merge_result['merged_count']} entity groups")
+                else:
+                    print("No entities needed merging")
+            
+            # Clean up graph projection
+            G.drop()
+            print("Graph projection cleaned up")
+            
+        except Exception as e:
+            print(f"Error during entity resolution: {e}")
+            try:
+                self.gds.graph.drop("entities")
+            except:
+                pass
 
     def create_entity_relationships(self, session, entity_ids: List[Tuple[str, str]]):
         """Create RELATES_TO relationships between entities that appear in the same chunk"""

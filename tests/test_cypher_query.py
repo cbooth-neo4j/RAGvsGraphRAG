@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import neo4j
 from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
 
-# Add parent directory to path to import RAGvsGraphRAG
+# Add parent directory to path to import retrievers
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Load environment variables
@@ -27,7 +27,7 @@ def test_cypher_query_structure():
     """Test that the Cypher query structure is valid"""
     print("🔍 Testing Cypher query structure...")
     
-    # The current Cypher query from RAGvsGraphRAG.py
+    # The current Cypher query from retrievers/graph_rag_retriever.py
     cypher_query = """
     UNWIND $chunk_data AS chunk_item
     MATCH (chunk:Chunk {id: chunk_item.chunk_id})-[:PART_OF]->(d:Document)

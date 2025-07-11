@@ -1,0 +1,13 @@
+ID,Category,Query,Rationale
+G1,Global overview,"Across all three RFPs, list the top five digital capabilities the companies demand and explain why those capabilities matter to their industries.",Needs entity aggregation & thematic ranking.
+G2,Global ESG synthesis,"Summarise the ESG‐related banking expectations each company expresses. How do they differ between an energy developer, a consultancy, and an airline-startup?",Requires cross-doc comparison & sector reasoning.
+G3,Global compliance landscape,"Identify every mention of regulatory, KYC, or sanctions compliance and produce a single consolidated risk checklist.",Must merge scattered compliance clauses.
+R1,Cross-doc relationship,Which RFPs request real-time reporting and how does each define ‘real-time’ or ‘dashboard’?,Tests graph edges between requirement nodes.
+R2,Comparative reasoning,Compare the integration requirements with ERP/TMS across the documents and rank them by integration complexity.,"Graph needed to align ‘Workday/SAP’, ‘TMS/ERP’, etc."
+R3,Entity intersection,Which banking capabilities appear in exactly two of the three RFPs? List them and name the two companies.,Demands set-intersection over entity nodes.
+F1,Local fact (drill-down),What is NovaGrid’s target renewable capacity for 2030 and where is this stated?,"After global context, jump to one paragraph."
+F2,Local fact,Give the deadline for bank proposals in the aviation RFP and its time zone.,Pure local retrieval check.
+F3,Local + provenance,"Which RFP mentions AI/ML-based policy enforcement, and quote the exact sentence.",Tests citation & chunk alignment.
+C1,Chain-of-thought (multi-hop),NovaGrid wants FX hedging and ESG-linked instruments. Draft a short rationale showing how a single bank could meet both needs.,Requires merging two distant requirements.
+C2,Follow-up depth,"Based on G1’s answer, drill down on the mobile-first UX requirement—detail what KPIs AtlasVentures might track.",Forces iterative querying (DRIFT pattern).
+S1,Scalability stress,Produce a one-paragraph executive summary that would brief a bank’s steering committee on common pain points these clients face when expanding internationally.,Synthesises whole corpus into board-level summary.

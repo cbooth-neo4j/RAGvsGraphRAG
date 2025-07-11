@@ -1,0 +1,30 @@
+{
+  "selected_approaches": [
+    "simple_graphrag",
+    "advanced_graphrag",
+    "drift_graphrag"
+  ],
+  "comparison_summary": {
+    "averages": {
+      "Simple GraphRAG": 0.3152333333333333,
+      "Advanced GraphRAG": 0.13026666666666667,
+      "DRIFT GraphRAG": 0.1868
+    },
+    "best_overall": "Simple GraphRAG"
+  },
+  "simple_graphrag_results": {
+    "context_recall": 0.24166666666666667,
+    "faithfulness": 0.5214799972797909,
+    "factual_correctness": 0.1825
+  },
+  "advanced_graphrag_results": {
+    "context_recall": 0.0,
+    "faithfulness": 0.3333333333333333,
+    "factual_correctness": 0.057499999999999996
+  },
+  "drift_graphrag_results": {
+    "context_recall": 0.0,
+    "faithfulness": 0.3686755952380952,
+    "factual_correctness": 0.19166666666666665
+  }
+}

@@ -122,6 +122,7 @@ metrics = [
     # ... other metrics
 ]
 ```
+# Others can be found at: `https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/`
 
 ### Changing Question Set
 

@@ -1,5 +1,5 @@
 """
-Simple RAGAS Benchmark: RAG vs GraphRAG Evaluation
+RAGAS Benchmark: RAG vs GraphRAG Evaluation
 
 This script evaluates both ChromaDB and GraphRAG approaches using RAGAS framework
 following the exact pattern from the RAGAS documentation.
@@ -12,6 +12,7 @@ import math
 import sys
 import os
 import argparse
+import asyncio
 from typing import List, Dict, Any
 import warnings
 warnings.filterwarnings("ignore")
@@ -39,17 +40,49 @@ from ragas import EvaluationDataset, evaluate
 from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import LLMContextRecall, Faithfulness, FactualCorrectness
 
-# Import our RAG systems
-from RAGvsGraphRAG import (
-    query_chroma_with_llm,
-    query_neo4j_with_llm,
-    query_neo4j_text2cypher
-)
+# Import our RAG systems from the new retrievers module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from retrievers import (
+        query_chroma_rag,
+        query_graphrag, 
+        query_advanced_graphrag,
+        query_drift_graphrag,
+        query_text2cypher_rag,
+        query_neo4j_vector_rag,
+        get_available_retrievers,
+        AVAILABLE_RETRIEVERS
+    )
+    
+    # Check availability of each retriever
+    available_retrievers = get_available_retrievers()
+    
+    CHROMA_AVAILABLE = 'chroma' in available_retrievers
+    GRAPHRAG_AVAILABLE = 'graphrag' in available_retrievers
+    ADVANCED_GRAPHRAG_AVAILABLE = 'advanced_graphrag' in available_retrievers
+    DRIFT_GRAPHRAG_AVAILABLE = 'drift_graphrag' in available_retrievers
+    TEXT2CYPHER_AVAILABLE = 'text2cypher' in available_retrievers
+    NEO4J_VECTOR_AVAILABLE = 'neo4j_vector' in available_retrievers
+    
+    print("✅ Retrievers module imported successfully")
+    print(f"📋 Available retrievers: {list(available_retrievers.keys())}")
+    
+except ImportError as e:
+    print(f"❌ Error importing retrievers module: {e}")
+    print("   Please ensure the retrievers module is properly set up.")
+    
+    # Set all retrievers as unavailable if import fails
+    CHROMA_AVAILABLE = False
+    GRAPHRAG_AVAILABLE = False
+    ADVANCED_GRAPHRAG_AVAILABLE = False
+    DRIFT_GRAPHRAG_AVAILABLE = False
+    TEXT2CYPHER_AVAILABLE = False
+    NEO4J_VECTOR_AVAILABLE = False
 
 # Initialize LLM and embeddings for RAGAS
 SEED = 42
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
+    model="gpt-4.1",
     temperature=0,
     model_kwargs={"seed": SEED},
     max_retries=0
@@ -85,15 +118,35 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
         print(f"  Processing question {i}/{len(benchmark_data)}: {query[:60]}...")
         
         try:
-            # Query the appropriate RAG system
-            if approach == "chroma":
-                result = query_chroma_with_llm(query, k=1)
-            elif approach == "graphrag":
-                result = query_neo4j_with_llm(query, k=5)
-            elif approach == "text2cypher":
-                result = query_neo4j_text2cypher(query)
+            # Query the appropriate RAG system using new retriever functions
+            if approach == "chroma" and CHROMA_AVAILABLE:
+                result = query_chroma_rag(query, k=1)
+            elif approach == "graphrag" and GRAPHRAG_AVAILABLE:
+                result = query_graphrag(query, k=5)
+            elif approach == "text2cypher" and TEXT2CYPHER_AVAILABLE:
+                result = query_text2cypher_rag(query)
+            elif approach == "advanced_graphrag" and ADVANCED_GRAPHRAG_AVAILABLE:
+                result = asyncio.run(query_advanced_graphrag(query, mode="hybrid", k=5))
+            elif approach == "drift_graphrag" and DRIFT_GRAPHRAG_AVAILABLE:
+                result = asyncio.run(query_drift_graphrag(query, depth=3, k_followups=3))
+            elif approach == "neo4j_vector" and NEO4J_VECTOR_AVAILABLE:
+                result = query_neo4j_vector_rag(query, k=5)
             else:
-                raise ValueError(f"Unknown approach: {approach}")
+                # Handle unavailable retrievers or unknown approaches
+                if approach == "chroma" and not CHROMA_AVAILABLE:
+                    raise ValueError(f"ChromaDB retriever not available")
+                elif approach == "graphrag" and not GRAPHRAG_AVAILABLE:
+                    raise ValueError(f"GraphRAG retriever not available")
+                elif approach == "text2cypher" and not TEXT2CYPHER_AVAILABLE:
+                    raise ValueError(f"Text2Cypher retriever not available")
+                elif approach == "advanced_graphrag" and not ADVANCED_GRAPHRAG_AVAILABLE:
+                    raise ValueError(f"Advanced GraphRAG retriever not available")
+                elif approach == "drift_graphrag" and not DRIFT_GRAPHRAG_AVAILABLE:
+                    raise ValueError(f"DRIFT GraphRAG retriever not available")
+                elif approach == "neo4j_vector" and not NEO4J_VECTOR_AVAILABLE:
+                    raise ValueError(f"Neo4j Vector retriever not available")
+                else:
+                    raise ValueError(f"Unknown approach: {approach}")
             
             # Extract retrieved contexts as simple list of strings (RAGAS format)
             retrieved_contexts = []
@@ -294,6 +347,47 @@ def create_comparison_table_simple(chroma_results: Dict, graphrag_results: Dict)
     
     return comparison_df
 
+def create_multi_approach_comparison_table(results_dict: Dict[str, Dict], approach_names: Dict[str, str]) -> pd.DataFrame:
+    """Create a comparison table for multiple approaches"""
+    
+    # Extract scores for all approaches
+    approach_scores = {}
+    for approach_key, results in results_dict.items():
+        if isinstance(results, dict):
+            approach_scores[approach_key] = results
+        else:
+            approach_scores[approach_key] = {}
+    
+    # Create comparison dataframe
+    metrics = []
+    approach_columns = {}
+    
+    # Initialize columns for each approach
+    for approach_key in approach_scores.keys():
+        approach_columns[approach_names.get(approach_key, approach_key)] = []
+    
+    # Map metric names to display names
+    metric_display_names = {
+        'context_recall': 'Context Recall',
+        'faithfulness': 'Faithfulness', 
+        'factual_correctness': 'Factual Correctness'
+    }
+    
+    for metric_key, display_name in metric_display_names.items():
+        metrics.append(display_name)
+        
+        for approach_key, scores in approach_scores.items():
+            approach_name = approach_names.get(approach_key, approach_key)
+            score = scores.get(metric_key, 0.0)
+            approach_columns[approach_name].append(round(score, 4))
+    
+    # Create comparison table
+    comparison_data = {'Metric': metrics}
+    comparison_data.update(approach_columns)
+    
+    comparison_df = pd.DataFrame(comparison_data)
+    return comparison_df
+
 def create_three_way_comparison_table(chroma_results: Dict, graphrag_results: Dict, text2cypher_results: Dict) -> pd.DataFrame:
     """Create a three-way comparison table for all approaches"""
     
@@ -452,10 +546,13 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python ragas_benchmark.py --all                    # Test all three approaches
-  python ragas_benchmark.py --chroma --graphrag      # Test ChromaDB vs GraphRAG only
-  python ragas_benchmark.py --chroma                 # Test ChromaDB only
-  python ragas_benchmark.py --text2cypher            # Test Text2Cypher only
+  python ragas_benchmark.py --all                                # Test all available approaches  
+      python ragas_benchmark.py --chroma --graphrag           # Test ChromaDB vs GraphRAG
+    python ragas_benchmark.py --graphrag --advanced-graphrag # Test GraphRAG vs Advanced GraphRAG
+  python ragas_benchmark.py --advanced-graphrag --drift-graphrag # Test Advanced vs DRIFT GraphRAG
+  python ragas_benchmark.py --chroma --advanced-graphrag --drift-graphrag # Test 3-way comparison
+  python ragas_benchmark.py --drift-graphrag                     # Test DRIFT GraphRAG only
+  python ragas_benchmark.py --chroma                             # Test ChromaDB only
         """
     )
     
@@ -480,6 +577,26 @@ Examples:
         help='Include Text2Cypher in testing'
     )
     parser.add_argument(
+        '--graphrag', 
+        action='store_true',
+        help='Include GraphRAG (original basic implementation) in testing'
+    )
+    parser.add_argument(
+        '--advanced-graphrag', 
+        action='store_true',
+        help='Include Advanced GraphRAG (intelligent global/local/hybrid) in testing'
+    )
+    parser.add_argument(
+        '--drift-graphrag', 
+        action='store_true',
+        help='Include DRIFT GraphRAG (iterative refinement) in testing'
+    )
+    parser.add_argument(
+        '--neo4j-vector', 
+        action='store_true',
+        help='Include Neo4j Vector RAG (pure vector similarity) in testing'
+    )
+    parser.add_argument(
         '--output-dir',
         default='benchmark_outputs',
         help='Output directory for results (default: benchmark_outputs)'
@@ -490,7 +607,14 @@ Examples:
     # Determine which approaches to test
     approaches = []
     if args.all:
-        approaches = ['chroma', 'graphrag', 'text2cypher']
+        base_approaches = ['chroma', 'graphrag', 'text2cypher']
+        if ADVANCED_GRAPHRAG_AVAILABLE:
+            base_approaches.append('advanced_graphrag')
+        if DRIFT_GRAPHRAG_AVAILABLE:
+            base_approaches.append('drift_graphrag')
+        if NEO4J_VECTOR_AVAILABLE:
+            base_approaches.append('neo4j_vector')
+        approaches = base_approaches
     else:
         if args.chroma:
             approaches.append('chroma')
@@ -498,11 +622,26 @@ Examples:
             approaches.append('graphrag')
         if args.text2cypher:
             approaches.append('text2cypher')
+        if getattr(args, 'graphrag', False):
+            approaches.append('graphrag')
+        if getattr(args, 'advanced_graphrag', False) and ADVANCED_GRAPHRAG_AVAILABLE:
+            approaches.append('advanced_graphrag')
+        if getattr(args, 'drift_graphrag', False) and DRIFT_GRAPHRAG_AVAILABLE:
+            approaches.append('drift_graphrag')
+        if getattr(args, 'neo4j_vector', False) and NEO4J_VECTOR_AVAILABLE:
+            approaches.append('neo4j_vector')
     
     # If no approaches specified, default to all
     if not approaches:
-        print("⚠️  No approaches specified. Defaulting to all three approaches.")
-        approaches = ['chroma', 'graphrag', 'text2cypher']
+        print("⚠️  No approaches specified. Defaulting to all available approaches.")
+        default_approaches = ['chroma', 'graphrag', 'text2cypher']
+        if ADVANCED_GRAPHRAG_AVAILABLE:
+            default_approaches.append('advanced_graphrag')
+        if DRIFT_GRAPHRAG_AVAILABLE:
+            default_approaches.append('drift_graphrag')
+        if NEO4J_VECTOR_AVAILABLE:
+            default_approaches.append('neo4j_vector')
+        approaches = default_approaches
     
     return approaches, args.output_dir
 
@@ -512,7 +651,11 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs")
     approach_names = {
         'chroma': 'ChromaDB RAG',
         'graphrag': 'GraphRAG', 
-        'text2cypher': 'Text2Cypher'
+        'text2cypher': 'Text2Cypher',
+        'graphrag': 'GraphRAG',
+        'advanced_graphrag': 'Advanced GraphRAG',
+        'drift_graphrag': 'DRIFT GraphRAG',
+        'neo4j_vector': 'Neo4j Vector RAG'
     }
     
     selected_names = [approach_names[approach] for approach in approaches]
@@ -563,12 +706,8 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs")
         comparison_table.columns = ['Metric', approach_names[approaches[0]], approach_names[approaches[1]], 'Improvement']
         
     else:
-        # Three approaches - create three-way comparison
-        comparison_table = create_three_way_comparison_table(
-            results['chroma'], 
-            results['graphrag'], 
-            results['text2cypher']
-        )
+        # Multiple approaches - create multi-approach comparison
+        comparison_table = create_multi_approach_comparison_table(results, approach_names)
     
     # Display results
     print(f"\n" + "=" * 90)
@@ -631,88 +770,7 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs")
         'datasets': datasets
     }
 
-def main_simple():
-    """Main benchmarking function - three-way comparison (legacy function)"""
-    print("🚀 Starting Three-Way RAGAS Benchmark: ChromaDB vs GraphRAG vs Text2Cypher")
-    print("=" * 80)
-    
-    # Load benchmark data
-    benchmark_data = load_benchmark_data()
-    
-    # Collect evaluation data for all three approaches
-    print("\n📋 Phase 1: Data Collection")
-    chroma_dataset = collect_evaluation_data_simple(benchmark_data, approach="chroma")
-    graphrag_dataset = collect_evaluation_data_simple(benchmark_data, approach="graphrag")
-    text2cypher_dataset = collect_evaluation_data_simple(benchmark_data, approach="text2cypher")
-    
-    # Evaluate all three approaches with RAGAS
-    print("\n📊 Phase 2: RAGAS Evaluation")
-    chroma_results = evaluate_with_ragas_simple(chroma_dataset, "ChromaDB RAG")
-    graphrag_results = evaluate_with_ragas_simple(graphrag_dataset, "GraphRAG")
-    text2cypher_results = evaluate_with_ragas_simple(text2cypher_dataset, "Text2Cypher")
-    
-    # Create three-way comparison table
-    print("\n📈 Phase 3: Results Analysis")
-    comparison_table = create_three_way_comparison_table(chroma_results, graphrag_results, text2cypher_results)
-    
-    # Display results
-    print("\n" + "=" * 90)
-    print("🏆 THREE-WAY BENCHMARK RESULTS SUMMARY")
-    print("=" * 90)
-    print(comparison_table.to_string(index=False))
-    
-    # Calculate overall performance
-    print("\n📊 OVERALL PERFORMANCE SUMMARY:")
-    print("-" * 50)
-    
-    chroma_avg = comparison_table['ChromaDB RAG'].mean()
-    graphrag_avg = comparison_table['GraphRAG'].mean()
-    text2cypher_avg = comparison_table['Text2Cypher'].mean()
-    
-    print(f"ChromaDB RAG Average Score:  {chroma_avg:.4f}")
-    print(f"GraphRAG Average Score:      {graphrag_avg:.4f}")
-    print(f"Text2Cypher Average Score:   {text2cypher_avg:.4f}")
-    
-    # Determine overall winner
-    scores = {'ChromaDB RAG': chroma_avg, 'GraphRAG': graphrag_avg, 'Text2Cypher': text2cypher_avg}
-    winner = max(scores, key=scores.get)
-    winner_score = scores[winner]
-    
-    print(f"\n🏆 Overall Winner: {winner} (Score: {winner_score:.4f})")
-    
-    # Show improvements compared to ChromaDB baseline
-    if graphrag_avg > chroma_avg:
-        graphrag_improvement = ((graphrag_avg - chroma_avg) / chroma_avg) * 100
-        print(f"📈 GraphRAG vs ChromaDB:    +{graphrag_improvement:.2f}%")
-    else:
-        graphrag_decline = ((chroma_avg - graphrag_avg) / chroma_avg) * 100
-        print(f"📉 GraphRAG vs ChromaDB:    -{graphrag_decline:.2f}%")
-    
-    if text2cypher_avg > chroma_avg:
-        text2cypher_improvement = ((text2cypher_avg - chroma_avg) / chroma_avg) * 100
-        print(f"📈 Text2Cypher vs ChromaDB: +{text2cypher_improvement:.2f}%")
-    else:
-        text2cypher_decline = ((chroma_avg - text2cypher_avg) / chroma_avg) * 100
-        print(f"📉 Text2Cypher vs ChromaDB: -{text2cypher_decline:.2f}%")
-    
-    # Save detailed results
-    print("\n💾 Phase 4: Saving Results")
-    save_results_simple(chroma_dataset, graphrag_dataset, text2cypher_dataset,
-                       chroma_results, graphrag_results, text2cypher_results, comparison_table)
-    
-    # Generate visualizations
-    print("\n📊 Phase 5: Generating Visualizations")
-    create_visualizations(comparison_table)
-    
-    print("\n✅ THREE-WAY BENCHMARK COMPLETE!")
-    print("=" * 80)
-    
-    return {
-        'chroma_results': chroma_results,
-        'graphrag_results': graphrag_results,
-        'text2cypher_results': text2cypher_results,
-        'comparison_table': comparison_table
-    }
+
 
 if __name__ == "__main__":
     # Parse command line arguments
