@@ -5,11 +5,7 @@ This retriever performs pure vector similarity search using Neo4j's vector index
 without any graph traversal or entity processing. It provides a baseline vector
 search approach for comparison with GraphRAG methods.
 
-Features:
-- Pure vector similarity search using Neo4j vector index
-- No graph traversal or entity processing
-- Compatible with standard retriever interface
-- Configurable embedding models and LLM models
+
 """
 
 import os

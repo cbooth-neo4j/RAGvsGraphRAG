@@ -128,7 +128,7 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             elif approach == "advanced_graphrag" and ADVANCED_GRAPHRAG_AVAILABLE:
                 result = asyncio.run(query_advanced_graphrag(query, mode="hybrid", k=5))
             elif approach == "drift_graphrag" and DRIFT_GRAPHRAG_AVAILABLE:
-                result = asyncio.run(query_drift_graphrag(query, depth=3, k_followups=3))
+                result = asyncio.run(query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True))
             elif approach == "neo4j_vector" and NEO4J_VECTOR_AVAILABLE:
                 result = query_neo4j_vector_rag(query, k=5)
             else:
@@ -577,11 +577,6 @@ Examples:
         help='Include Text2Cypher in testing'
     )
     parser.add_argument(
-        '--graphrag', 
-        action='store_true',
-        help='Include GraphRAG (original basic implementation) in testing'
-    )
-    parser.add_argument(
         '--advanced-graphrag', 
         action='store_true',
         help='Include Advanced GraphRAG (intelligent global/local/hybrid) in testing'
@@ -622,8 +617,6 @@ Examples:
             approaches.append('graphrag')
         if args.text2cypher:
             approaches.append('text2cypher')
-        if getattr(args, 'graphrag', False):
-            approaches.append('graphrag')
         if getattr(args, 'advanced_graphrag', False) and ADVANCED_GRAPHRAG_AVAILABLE:
             approaches.append('advanced_graphrag')
         if getattr(args, 'drift_graphrag', False) and DRIFT_GRAPHRAG_AVAILABLE:
@@ -652,7 +645,6 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs")
         'chroma': 'ChromaDB RAG',
         'graphrag': 'GraphRAG', 
         'text2cypher': 'Text2Cypher',
-        'graphrag': 'GraphRAG',
         'advanced_graphrag': 'Advanced GraphRAG',
         'drift_graphrag': 'DRIFT GraphRAG',
         'neo4j_vector': 'Neo4j Vector RAG'

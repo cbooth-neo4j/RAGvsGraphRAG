@@ -32,6 +32,7 @@ load_dotenv()
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
+LLM = os.environ.get('OPENAI_MODEL_NAME', 'gpt-4o-mini')  # Default to gpt-4o-mini if not set
 
 class DuplicateEntities(BaseModel):
     entities: List[str] = Field(
@@ -47,7 +48,7 @@ class CustomGraphProcessor:
     def __init__(self):
         self.driver = neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         self.embeddings = OpenAIEmbeddings()
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        self.llm = ChatOpenAI(model=LLM, temperature=0)
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=50,
@@ -57,7 +58,7 @@ class CustomGraphProcessor:
         
         # Entity resolution components
         self.gds = GraphDataScience(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        self.extraction_llm = ChatOpenAI(model_name="gpt-4o").with_structured_output(Disambiguate)
+        self.extraction_llm = ChatOpenAI(model_name=LLM).with_structured_output(Disambiguate)
         
         # Entity resolution prompt
         system_prompt = """You are a data processing assistant. Your task is to identify duplicate entities in a list and decide which of them should be merged.
@@ -420,10 +421,12 @@ Please identify duplicates, merge them, and provide the merged list.
                     embedding_text = f"{org_name}: {org_description}" if org_description else org_name
                     org_embedding = self.create_embedding(embedding_text)
                     session.run("""
-                        MERGE (o:Organization {name: $name})
-                        ON CREATE SET o.description = $description, o.embedding = $embedding
+                        MERGE (o:Organization:__Entity__ {name: $name})
+                        ON CREATE SET o.description = $description, o.embedding = $embedding,
+                                    o.id = $name, o.entity_type = 'Organization'
                         ON MATCH SET o.description = CASE WHEN o.description IS NULL THEN $description ELSE o.description END,
-                                   o.embedding = CASE WHEN o.embedding IS NULL THEN $embedding ELSE o.embedding END
+                                   o.embedding = CASE WHEN o.embedding IS NULL THEN $embedding ELSE o.embedding END,
+                                   o.id = $name, o.entity_type = 'Organization'
                         WITH o
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(o)
@@ -437,10 +440,12 @@ Please identify duplicates, merge them, and provide the merged list.
                     embedding_text = f"{loc_name}: {loc_description}" if loc_description else loc_name
                     loc_embedding = self.create_embedding(embedding_text)
                     session.run("""
-                        MERGE (l:Location {name: $name})
-                        ON CREATE SET l.description = $description, l.embedding = $embedding
+                        MERGE (l:Location:__Entity__ {name: $name})
+                        ON CREATE SET l.description = $description, l.embedding = $embedding,
+                                    l.id = $name, l.entity_type = 'Location'
                         ON MATCH SET l.description = CASE WHEN l.description IS NULL THEN $description ELSE l.description END,
-                                   l.embedding = CASE WHEN l.embedding IS NULL THEN $embedding ELSE l.embedding END
+                                   l.embedding = CASE WHEN l.embedding IS NULL THEN $embedding ELSE l.embedding END,
+                                   l.id = $name, l.entity_type = 'Location'
                         WITH l
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(l)
@@ -454,10 +459,12 @@ Please identify duplicates, merge them, and provide the merged list.
                     embedding_text = f"{date_name}: {date_description}" if date_description else date_name
                     date_embedding = self.create_embedding(embedding_text)
                     session.run("""
-                        MERGE (dt:Date {name: $name})
-                        ON CREATE SET dt.description = $description, dt.embedding = $embedding
+                        MERGE (dt:Date:__Entity__ {name: $name})
+                        ON CREATE SET dt.description = $description, dt.embedding = $embedding,
+                                    dt.id = $name, dt.entity_type = 'Date'
                         ON MATCH SET dt.description = CASE WHEN dt.description IS NULL THEN $description ELSE dt.description END,
-                                   dt.embedding = CASE WHEN dt.embedding IS NULL THEN $embedding ELSE dt.embedding END
+                                   dt.embedding = CASE WHEN dt.embedding IS NULL THEN $embedding ELSE dt.embedding END,
+                                   dt.id = $name, dt.entity_type = 'Date'
                         WITH dt
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(dt)
@@ -471,10 +478,12 @@ Please identify duplicates, merge them, and provide the merged list.
                     embedding_text = f"{req_name}: {req_description}" if req_description else req_name
                     req_embedding = self.create_embedding(embedding_text)
                     session.run("""
-                        MERGE (r:Requirement {name: $name})
-                        ON CREATE SET r.description = $description, r.embedding = $embedding
+                        MERGE (r:Requirement:__Entity__ {name: $name})
+                        ON CREATE SET r.description = $description, r.embedding = $embedding,
+                                    r.id = $name, r.entity_type = 'Requirement'
                         ON MATCH SET r.description = CASE WHEN r.description IS NULL THEN $description ELSE r.description END,
-                                   r.embedding = CASE WHEN r.embedding IS NULL THEN $embedding ELSE r.embedding END
+                                   r.embedding = CASE WHEN r.embedding IS NULL THEN $embedding ELSE r.embedding END,
+                                   r.id = $name, r.entity_type = 'Requirement'
                         WITH r
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(r)
@@ -488,10 +497,12 @@ Please identify duplicates, merge them, and provide the merged list.
                     embedding_text = f"{person_name}: {person_description}" if person_description else person_name
                     person_embedding = self.create_embedding(embedding_text)
                     session.run("""
-                        MERGE (p:Person {name: $name})
-                        ON CREATE SET p.description = $description, p.embedding = $embedding
+                        MERGE (p:Person:__Entity__ {name: $name})
+                        ON CREATE SET p.description = $description, p.embedding = $embedding,
+                                    p.id = $name, p.entity_type = 'Person'
                         ON MATCH SET p.description = CASE WHEN p.description IS NULL THEN $description ELSE p.description END,
-                                   p.embedding = CASE WHEN p.embedding IS NULL THEN $embedding ELSE p.embedding END
+                                   p.embedding = CASE WHEN p.embedding IS NULL THEN $embedding ELSE p.embedding END,
+                                   p.id = $name, p.entity_type = 'Person'
                         WITH p
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(p)
@@ -505,10 +516,12 @@ Please identify duplicates, merge them, and provide the merged list.
                     embedding_text = f"{financial_name}: {financial_description}" if financial_description else financial_name
                     financial_embedding = self.create_embedding(embedding_text)
                     session.run("""
-                        MERGE (f:Financial {name: $name})
-                        ON CREATE SET f.description = $description, f.embedding = $embedding
+                        MERGE (f:Financial:__Entity__ {name: $name})
+                        ON CREATE SET f.description = $description, f.embedding = $embedding,
+                                    f.id = $name, f.entity_type = 'Financial'
                         ON MATCH SET f.description = CASE WHEN f.description IS NULL THEN $description ELSE f.description END,
-                                   f.embedding = CASE WHEN f.embedding IS NULL THEN $embedding ELSE f.embedding END
+                                   f.embedding = CASE WHEN f.embedding IS NULL THEN $embedding ELSE f.embedding END,
+                                   f.id = $name, f.entity_type = 'Financial'
                         WITH f
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(f)

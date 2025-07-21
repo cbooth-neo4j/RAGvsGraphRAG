@@ -50,6 +50,7 @@ Thumbs.db
 # Project specific
 PDFs/
 !PDFs/.gitkeep
+benchmark_outputs/
 
 # Byte-compiled / optimized / DLL files
 *.py[codz]

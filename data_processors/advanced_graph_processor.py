@@ -1,11 +1,12 @@
 """
-Enhanced Graph Processor for RFP Analysis with Element Summarization and Community Detection
+Advanced Graph Processor for RFP Analysis with Element Summarization and Community Detection
 
-This script extends the basic graph processor with:
+This script enhances an existing graph created by graph_processor.py with:
 1. Element summarization capabilities for enhanced entity descriptions
 2. Community detection and summarization for hierarchical graph structure
 
-This processor requires the basic graph processor to be run first for entity resolution.
+PREREQUISITE: Run graph_processor.py first to create the base graph.
+This processor only works on existing graphs and does not build from scratch.
 """
 
 import os
@@ -27,7 +28,14 @@ import numpy as np
 from langchain_core.output_parsers import StrOutputParser
 
 # Import the basic graph processor
-from .graph_processor import CustomGraphProcessor
+try:
+    from .graph_processor import CustomGraphProcessor
+except ImportError:
+    # Fallback for when running as a direct script
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from data_processors.graph_processor import CustomGraphProcessor
 
 # Load environment variables
 load_dotenv()
@@ -36,6 +44,7 @@ load_dotenv()
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
+LLM = os.environ.get('OPENAI_MODEL_NAME', 'gpt-4o-mini')  # Default to gpt-4o-mini if not set
 
 @dataclass
 class ElementSummary:
@@ -65,7 +74,7 @@ class AdvancedGraphProcessor(CustomGraphProcessor):
         # Element summarization components
         self.element_summarization_enabled = False  # Default to disabled due to cost
         self.element_batch_size = 10  # Process entities in batches to reduce LLM calls
-        self.summarization_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+        self.summarization_llm = ChatOpenAI(model=LLM, temperature=0.1)
         
         # Element summarization prompt
         element_system_prompt = """You are an expert information analyst. Your task is to create enhanced, comprehensive descriptions for entities and relationships based on multiple mentions across documents.
@@ -110,7 +119,7 @@ Return a JSON object with this structure:
         
         # Community summarization components
         self.community_summarization_enabled = False  # Default to disabled
-        self.community_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+        self.community_llm = ChatOpenAI(model=LLM, temperature=0.1)
         
         # Community summarization prompt
         community_system_prompt = """You are an expert analyst specializing in understanding complex networks and relationships. 
@@ -629,68 +638,223 @@ Summary:"""
         self.community_summarization_enabled = False
         print("Community summarization disabled")
 
-    def process_directory(self, pdf_dir: str, perform_resolution: bool = True, perform_element_summarization: bool = False, perform_community_detection: bool = False) -> Dict[str, Any]:
-        """Process all PDFs in a directory and optionally perform entity resolution, element summarization, and community detection"""
+    def _check_existing_graph(self) -> Optional[Dict[str, int]]:
+        """Check if graph exists and return node counts by type"""
+        with self.driver.session() as session:
+            # Check for basic graph structure
+            result = session.run("""
+                MATCH (n)
+                WITH labels(n) as labels, count(n) as count
+                RETURN labels, count
+                ORDER BY count DESC
+            """).data()
+            
+            if not result:
+                return None
+            
+            # Process results into a readable format
+            stats = {}
+            for record in result:
+                labels = record['labels']
+                count = record['count']
+                
+                # Skip internal Neo4j labels
+                if any(label.startswith('_') and label != '__Entity__' and label != '__Community__' for label in labels):
+                    continue
+                
+                # Combine counts for nodes that have both specific type and __Entity__ label
+                label_key = next((label for label in labels if label not in ['__Entity__', '__Community__']), None)
+                if label_key:
+                    stats[label_key] = stats.get(label_key, 0) + count
+                elif '__Community__' in labels:
+                    stats['Communities'] = count
+            
+            return stats if stats else None
+
+    def _estimate_costs(self, stats: Dict[str, int], perform_element_summarization: bool, perform_community_detection: bool) -> Dict[str, Any]:
+        """Estimate LLM API costs for graph enhancement operations"""
+        costs = {}
         
-        # Call parent's process_directory to handle basic processing and entity resolution
-        results = super().process_directory(pdf_dir, perform_resolution)
+        # Get entity count and description length in a single session
+        with self.driver.session() as session:
+            # Get entity count and average description length in one query
+            result = session.run("""
+                MATCH (e:__Entity__)
+                WITH count(e) as entity_count,
+                     avg(size(coalesce(e.description, ''))) as avg_length
+                RETURN entity_count, avg_length
+            """).single()
+            
+            entity_count = result['entity_count']
+            avg_desc_length = result['avg_length'] or 0
+        
+        # Element summarization costs
+        if perform_element_summarization:
+            batch_count = ceil(entity_count / self.element_batch_size)
+            avg_tokens_per_entity = 25  # Rough estimate for entity name + type
+            avg_tokens_per_batch = self.element_batch_size * (avg_tokens_per_entity + avg_desc_length)
+            
+            costs['element_summarization'] = {
+                'model': LLM,
+                'entity_count': entity_count,
+                'batch_count': batch_count,
+                'estimated_tokens': avg_tokens_per_batch * batch_count,
+                'estimated_cost': (avg_tokens_per_batch * batch_count * 0.01) / 1000  # $0.01 per 1K tokens
+            }
+        
+        # Community detection costs
+        if perform_community_detection:
+            # Get community count estimate in a new session
+            with self.driver.session() as session:
+                try:
+                    community_count = session.run("""
+                        CALL gds.graph.project.estimate('entity-graph', ['__Entity__'], ['RELATES_TO'])
+                        YIELD nodeCount
+                        RETURN nodeCount
+                    """).single()['nodeCount']
+                except Exception as e:
+                    # Fallback if GDS estimate fails
+                    community_count = int(entity_count * 0.1)  # Estimate ~10% of entities form communities
+            
+            # Estimate costs for community summarization
+            avg_tokens_per_community = 500  # Rough estimate for community context and generation
+            total_community_tokens = community_count * avg_tokens_per_community
+            
+            costs['community_detection'] = {
+                'model': LLM,
+                'community_count': community_count,
+                'estimated_tokens': total_community_tokens,
+                'estimated_cost': (total_community_tokens * 0.01) / 1000  # $0.01 per 1K tokens
+            }
+        
+        return costs
+
+    def _get_user_confirmation(self, costs: Dict[str, Any], perform_element_summarization: bool, perform_community_detection: bool) -> bool:
+        """Get user confirmation for LLM operations based on cost estimates"""
+        total_cost = 0
+        
+        print("\n💰 Estimated costs:\n")
+        
+        if perform_element_summarization and "element_summarization" in costs:
+            ec = costs["element_summarization"]
+            print(f"Element Summarization:")
+            print(f"  • {ec['entity_count']} entities in {ec['batch_count']} batches")
+            print(f"  • Model: {ec['model']}")
+            print(f"  • ~{ec['estimated_tokens']:,} tokens")
+            print(f"  • ~${ec['estimated_cost']:.2f} USD")
+            total_cost += ec['estimated_cost']
+        
+        if perform_community_detection and "community_detection" in costs:
+            cc = costs["community_detection"]
+            print(f"\nCommunity Detection:")
+            print(f"  • {cc['community_count']} communities")
+            print(f"  • Model: {cc['model']}")
+            print(f"  • ~{cc['estimated_tokens']:,} tokens")
+            print(f"  • ~${cc['estimated_cost']:.2f} USD")
+            total_cost += cc['estimated_cost']
+        
+        print(f"\nTotal estimated cost: ${total_cost:.2f} USD\n")
+        
+        print("⚠️ " * 20)
+        print("COST WARNING: Advanced graph enhancement uses LLM APIs")
+        print("⚠️ " * 20 + "\n")
+        
+        while True:
+            response = input("Do you want to proceed? [y/N]: ").lower().strip()
+            if response in ['y', 'yes']:
+                return True
+            elif response in ['', 'n', 'no']:
+                return False
+            else:
+                print("Please enter 'y' for yes or 'n' for no (or press Enter for no)")
+
+    def enhance_existing_graph(self, perform_element_summarization: bool = False, perform_community_detection: bool = False) -> Dict[str, Any]:
+        """Enhance an existing graph with element summarization and community detection.
+        
+        This method requires that graph_processor.py has already been run to create the base graph.
+        """
+        
+        # Check if graph exists
+        print("🔍 Checking existing graph...")
+        stats = self._check_existing_graph()
+        
+        if not stats:
+            raise ValueError(
+                "❌ No graph data found! You must run graph_processor.py first to create the base graph.\n"
+                "Run: python data_processors/graph_processor.py"
+            )
+        
+        print("📊 Found existing graph with:")
+        for label, count in stats.items():
+            print(f"   {label}: {count} nodes")
+        
+        # Estimate costs and get user confirmation
+        if perform_element_summarization or perform_community_detection:
+            costs = self._estimate_costs(stats, perform_element_summarization, perform_community_detection)
+            
+            if not self._get_user_confirmation(costs, perform_element_summarization, perform_community_detection):
+                print("\n❌ Enhancement cancelled by user")
+                return {"status": "cancelled_by_user", "initial_stats": stats}
         
         # Perform element summarization if requested
         if perform_element_summarization:
-            if not self.element_summarization_enabled:
-                print("⚠️ Element summarization requested but not enabled. Call enable_element_summarization() first.")
-            else:
-                try:
-                    self.perform_element_summarization(summarize_entities=True, summarize_relationships=False)
-                    print("✅ Element summarization completed")
-                except Exception as e:
-                    print(f"❌ Error during element summarization: {e}")
+            print("\n🔄 Starting element summarization...")
+            self.element_summarization_enabled = True
+            self.perform_element_summarization(summarize_entities=True, summarize_relationships=False)
         
         # Perform community detection if requested
         if perform_community_detection:
-            if not self.community_summarization_enabled:
-                print("⚠️ Community detection requested but not enabled. Call enable_community_summarization() first.")
-            else:
-                try:
-                    self.perform_community_detection(max_levels=[0, 1, 2], min_community_size=2)
-                    print("✅ Community detection completed")
-                except Exception as e:
-                    print(f"❌ Error during community detection: {e}")
+            print("\n🔄 Starting community detection...")
+            self.community_summarization_enabled = True
+            self.perform_community_detection(max_levels=[0, 1, 2], min_community_size=2)
         
-        return results
+        # Get final stats
+        final_stats = self._check_existing_graph()
+        
+        return {
+            "status": "success",
+            "initial_stats": stats,
+            "final_stats": final_stats
+        }
 
 
 def main():
-    """Main processing function"""
+    """Main processing function - enhances existing graph created by graph_processor.py"""
     processor = AdvancedGraphProcessor()
     
     try:
         # Optional: Enable element summarization (WARNING: This increases LLM costs significantly)
-        processor.enable_element_summarization(batch_size=10)  # Uncomment to enable
+        processor.enable_element_summarization(batch_size=10)
         
         # Optional: Enable community detection and summarization (WARNING: Additional LLM costs)
-        processor.enable_community_summarization()  # Uncomment to enable
+        processor.enable_community_summarization() 
         
-        # Process PDFs directory with entity resolution, element summarization, and community detection
-        results = processor.process_directory(
-            "PDFs", 
-            perform_resolution=True, 
+        # Enhance existing graph with element summarization and community detection
+        results = processor.enhance_existing_graph(
             perform_element_summarization=True,
-            perform_community_detection=True  # Set to True to enable community detection
+            perform_community_detection=True
         )
         
         print("\n" + "="*60)
-        print("PROCESSING SUMMARY")
+        print("ENHANCEMENT SUMMARY")
         print("="*60)
         
-        for filename, result in results.items():
-            status = result.get('status', 'unknown')
-            if status == 'success':
-                chunks = result.get('chunks_created', 0)
-                print(f"✅ {filename}: {chunks} chunks created")
-            else:
-                error = result.get('error', 'Unknown error')
-                print(f"❌ {filename}: {error}")
+        if results.get('status') == 'enhanced_existing_graph':
+            print("✅ Successfully enhanced existing graph")
+            print("\nInitial graph contained:")
+            for label, count in results.get('initial_stats', {}).items():
+                print(f"   {label}: {count} nodes")
+            
+            if 'final_stats' in results:
+                print("\nAfter creating __Entity__ wrappers:")
+                for label, count in results.get('final_stats', {}).items():
+                    print(f"   {label}: {count} nodes")
+        elif results.get('status') == 'cancelled_by_user':
+            print("⏹️ Enhancement cancelled by user")
+            print("No changes were made to the graph")
+            return
+        else:
+            print("❌ Enhancement failed or was not completed")
         
         # Print database stats
         with processor.driver.session() as session:
@@ -704,21 +868,17 @@ def main():
             for stat in stats:
                 print(f"  {stat['label']}: {stat['count']} nodes")
                 
-            # Show element summarization status
+            # Show element summarization results
             enhanced_count = session.run("""
                 MATCH (e:__Entity__ {enhanced_summary: true})
                 RETURN count(e) as enhanced_count
             """).single()
             
             if enhanced_count and enhanced_count['enhanced_count'] > 0:
-                print(f"\nElement Summarization:")
-                print(f"  Enhanced entities: {enhanced_count['enhanced_count']}")
-            else:
-                print(f"\nElement Summarization: Not performed")
-                print(f"  To enable: processor.enable_element_summarization()")
-                print(f"  Then run with: perform_element_summarization=True")
+                print(f"\n📝 Element Summarization Results:")
+                print(f"  ✅ Enhanced {enhanced_count['enhanced_count']} entity descriptions")
             
-            # Show community detection status
+            # Show community detection results
             community_stats = session.run("""
                 MATCH (c:__Community__)
                 WITH count(c) as total_communities
@@ -728,9 +888,9 @@ def main():
             """).single()
             
             if community_stats and community_stats['total_communities'] > 0:
-                print(f"\nCommunity Detection:")
-                print(f"  Total communities: {community_stats['total_communities']}")
-                print(f"  Summarized communities: {community_stats['summarized_communities']}")
+                print(f"\n🌐 Community Detection Results:")
+                print(f"  ✅ Created {community_stats['total_communities']} communities")
+                print(f"  ✅ Generated {community_stats['summarized_communities']} community summaries")
                 
                 # Show community level distribution
                 level_distribution = session.run("""
@@ -739,13 +899,10 @@ def main():
                     ORDER BY c.level
                 """).data()
                 
-                print(f"  Community levels:")
-                for level_stat in level_distribution:
-                    print(f"    Level {level_stat['level']}: {level_stat['count']} communities")
-            else:
-                print(f"\nCommunity Detection: Not performed")
-                print(f"  To enable: processor.enable_community_summarization()")
-                print(f"  Then run with: perform_community_detection=True")
+                if level_distribution:
+                    print(f"  Community hierarchy:")
+                    for level_stat in level_distribution:
+                        print(f"    Level {level_stat['level']}: {level_stat['count']} communities")
                 
     finally:
         processor.close()

@@ -11,6 +11,7 @@ for GraphRAG retrieval, featuring:
 5. Multi-action synthesis for comprehensive answers
 
 Based on Microsoft's DRIFT implementation but adapted for our graph structure.
+Now uses modular architecture with separate components for better maintainability.
 """
 
 import os
@@ -35,6 +36,9 @@ from dotenv import load_dotenv
 # Import our graph processor and advanced retriever
 from data_processors import AdvancedGraphProcessor
 from .advanced_graphrag_retriever import GraphRAGLocalRetriever, SearchResult
+
+# Import new modular DRIFT components
+from .drift_modules import DRIFTSearch, DRIFTConfig, query_drift_search, create_drift_search
 
 # Load environment variables
 load_dotenv()
@@ -245,9 +249,14 @@ class QueryState:
         total_calls = total_prompt = total_output = 0
         
         for action in self.graph.nodes:
-            total_calls += action.metadata.get("llm_calls", 0)
-            total_prompt += action.metadata.get("prompt_tokens", 0)
-            total_output += action.metadata.get("output_tokens", 0)
+            # Add null checks to handle None values
+            llm_calls = action.metadata.get("llm_calls", 0)
+            prompt_tokens = action.metadata.get("prompt_tokens", 0)
+            output_tokens = action.metadata.get("output_tokens", 0)
+            
+            total_calls += llm_calls if llm_calls is not None else 0
+            total_prompt += prompt_tokens if prompt_tokens is not None else 0
+            total_output += output_tokens if output_tokens is not None else 0
         
         return {
             "llm_calls": total_calls,
@@ -435,11 +444,21 @@ Ensure that the hypothetical answer does not reference new named entities that a
             }
 
 class DriftGraphRAGRetriever:
-    """Main DRIFT GraphRAG retriever implementing iterative refinement"""
+    """
+    Main DRIFT GraphRAG retriever implementing iterative refinement
+    
+    This class now uses the modular DRIFT architecture for better maintainability
+    while preserving backward compatibility with the existing interface.
+    """
     
     def __init__(self, graph_processor: AdvancedGraphProcessor, config: Optional[DRIFTConfig] = None):
         self.graph = graph_processor
         self.config = config or DRIFTConfig()
+        
+        # Initialize new modular DRIFT system
+        self.modular_drift = DRIFTSearch(graph_processor, self._convert_config())
+        
+        # Keep legacy components for backward compatibility
         self.primer = PrimerQueryProcessor(graph_processor, self.config)
         self.local_search = GraphRAGLocalRetriever(graph_processor)
         self.query_state = QueryState()
@@ -465,11 +484,27 @@ Research Results:
             ("human", "Original Query: {query}\n\nPlease synthesize all research results into a comprehensive answer.")
         ])
     
+    def _convert_config(self) -> DRIFTConfig:
+        """Convert legacy DRIFTConfig to new modular DRIFTConfig"""
+        from .drift_modules import DRIFTConfig as ModularDRIFTConfig
+        
+        return ModularDRIFTConfig(
+            n_depth=self.config.n_depth,
+            max_follow_ups=self.config.drift_k_followups,
+            max_concurrent=self.config.max_concurrent,
+            temperature=self.config.temperature,
+            min_relevance_score=self.config.min_relevance_score,
+            enable_primer=True,
+            enable_reduce=True,
+            auto_route=True
+        )
+    
     async def search(
         self,
         query: str,
         max_communities: int = 8,
         reduce: bool = True,
+        use_modular: bool = True,
         **kwargs
     ) -> SearchResult:
         """Execute DRIFT search with iterative refinement"""
@@ -481,6 +516,36 @@ Research Results:
         
         try:
             print(f"🌀 Starting DRIFT search for: {query[:60]}...")
+            
+            # Use new modular system if enabled
+            if use_modular:
+                print("🔧 Using modular DRIFT architecture...")
+                try:
+                    modular_result = await self.modular_drift.search(
+                        query,
+                        enable_reduce=reduce,
+                        **kwargs
+                    )
+                    
+                    # Convert to legacy SearchResult format with safe extraction
+                    exec_summary = modular_result.execution_summary or {}
+                    token_usage = exec_summary.get("token_usage", {})
+                    
+                    return SearchResult(
+                        response=modular_result.response,
+                        context_data=modular_result.query_state.serialize(),
+                        context_text=modular_result.response,
+                        completion_time=modular_result.execution_time,
+                        llm_calls=exec_summary.get("total_llm_calls", 0) or 0,
+                        prompt_tokens=token_usage.get("prompt_tokens", 0) or 0,
+                        output_tokens=token_usage.get("output_tokens", 0) or 0
+                    )
+                except Exception as e:
+                    print(f"⚠️ Modular DRIFT failed, falling back to legacy: {e}")
+                    use_modular = False
+            
+            # Legacy implementation
+            print("🔧 Using legacy DRIFT implementation...")
             
             # Phase 1: Primer - decompose query using communities
             print("📋 Phase 1: Query decomposition (Primer)")
@@ -570,8 +635,7 @@ Research Results:
                 completion_time=time.time() - start_time,
                 llm_calls=total_llm_calls,
                 prompt_tokens=total_prompt_tokens,
-                output_tokens=total_output_tokens,
-                method="drift_graphrag"
+                output_tokens=total_output_tokens
             )
             
         except Exception as e:
@@ -586,8 +650,7 @@ Research Results:
                 completion_time=time.time() - start_time,
                 llm_calls=total_llm_calls,
                 prompt_tokens=total_prompt_tokens,
-                output_tokens=total_output_tokens,
-                method="drift_graphrag_error"
+                output_tokens=total_output_tokens
             )
     
     async def _reduce_responses(self, query: str, serialized_state: Dict[str, Any]) -> str:
@@ -649,24 +712,47 @@ Research Results:
         return "\n\n".join(formatted_responses)
 
 # Main integration function for benchmark
-async def query_drift_graphrag(query: str, **kwargs) -> Dict[str, Any]:
+async def query_drift_graphrag(query: str, use_modular: bool = True, **kwargs) -> Dict[str, Any]:
     """
     DRIFT GraphRAG retrieval for benchmark integration
     
     Args:
         query: The search query
+        use_modular: Whether to use new modular DRIFT system (default: True)
         **kwargs: Additional configuration options
     
     Returns:
         Dictionary with response and retrieval details
     """
     
-    # Initialize graph processor
+    # Initialize graph processor with error handling
     from data_processors import AdvancedGraphProcessor
-    processor = AdvancedGraphProcessor()
+    try:
+        processor = AdvancedGraphProcessor()
+        print("✅ Neo4j connection successful")
+    except Exception as e:
+        print(f"⚠️ Neo4j connection failed: {e}")
+        print("🔄 Attempting to use fallback approach...")
+        
+        # Return a simple fallback response
+        return {
+            'response': f"I apologize, but I'm unable to process your query '{query}' due to database connectivity issues. Please check your Neo4j connection and try again.",
+            'method': 'DRIFT_GRAPHRAG_FALLBACK',
+            'execution_time': 0.1,
+            'error': str(e)
+        }
     
     try:
-        # Configure DRIFT
+        # Try new modular system first if enabled
+        if use_modular:
+            try:
+                result_dict = await query_drift_search(query, graph_processor=processor, **kwargs)
+                return result_dict
+            except Exception as e:
+                print(f"⚠️ Modular DRIFT failed, falling back to legacy: {e}")
+                # Continue to legacy system
+        
+        # Legacy system
         config = DRIFTConfig(
             n_depth=kwargs.get('depth', 3),
             drift_k_followups=kwargs.get('k_followups', 3),
@@ -676,8 +762,8 @@ async def query_drift_graphrag(query: str, **kwargs) -> Dict[str, Any]:
         # Create DRIFT retriever
         retriever = DriftGraphRAGRetriever(processor, config)
         
-        # Perform search
-        result = await retriever.search(query, **kwargs)
+        # Perform search with legacy system
+        result = await retriever.search(query, use_modular=False, **kwargs)
         
         # Format response for benchmark compatibility
         return {
