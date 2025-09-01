@@ -50,6 +50,7 @@ try:
         query_drift_graphrag,
         query_text2cypher_rag,
         query_neo4j_vector_rag,
+        query_hybrid_cypher_rag,
         get_available_retrievers,
         AVAILABLE_RETRIEVERS
     )
@@ -63,6 +64,7 @@ try:
     DRIFT_GRAPHRAG_AVAILABLE = 'drift_graphrag' in available_retrievers
     TEXT2CYPHER_AVAILABLE = 'text2cypher' in available_retrievers
     NEO4J_VECTOR_AVAILABLE = 'neo4j_vector' in available_retrievers
+    HYBRID_CYPHER_AVAILABLE = 'hybrid_cypher' in available_retrievers
     
     print("✅ Retrievers module imported successfully")
     print(f"📋 Available retrievers: {list(available_retrievers.keys())}")
@@ -131,6 +133,9 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                 result = asyncio.run(query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True))
             elif approach == "neo4j_vector" and NEO4J_VECTOR_AVAILABLE:
                 result = query_neo4j_vector_rag(query, k=5)
+            elif approach == "hybrid_cypher" and HYBRID_CYPHER_AVAILABLE:
+                # Use the main hybrid cypher function with reduced k for benchmark stability
+                result = query_hybrid_cypher_rag(query, k=5)
             else:
                 # Handle unavailable retrievers or unknown approaches
                 if approach == "chroma" and not CHROMA_AVAILABLE:
@@ -145,6 +150,8 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                     raise ValueError(f"DRIFT GraphRAG retriever not available")
                 elif approach == "neo4j_vector" and not NEO4J_VECTOR_AVAILABLE:
                     raise ValueError(f"Neo4j Vector retriever not available")
+                elif approach == "hybrid_cypher" and not HYBRID_CYPHER_AVAILABLE:
+                    raise ValueError(f"Hybrid Cypher retriever not available")
                 else:
                     raise ValueError(f"Unknown approach: {approach}")
             
@@ -152,8 +159,13 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             retrieved_contexts = []
             for detail in result.get('retrieval_details', []):
                 content = detail.get('content', '')
+                if not content:
+                    # Build a compact string from hybrid details if no 'content'
+                    neighbor_summaries = detail.get('neighbor_summaries')
+                    anchor = detail.get('anchor')
+                    if neighbor_summaries:
+                        content = f"Anchor: {str(anchor)[:200]} | Neighbors: " + ", ".join(map(str, neighbor_summaries[:20]))
                 if content:
-                    # Truncate very long content to avoid issues
                     if len(content) > 1000:
                         content = content[:1000] + "..."
                     retrieved_contexts.append(content)
@@ -592,6 +604,11 @@ Examples:
         help='Include Neo4j Vector RAG (pure vector similarity) in testing'
     )
     parser.add_argument(
+        '--hybrid-cypher', 
+        action='store_true',
+        help='Include Hybrid Cypher RAG (hybrid + generic neighborhood) in testing'
+    )
+    parser.add_argument(
         '--output-dir',
         default='benchmark_outputs',
         help='Output directory for results (default: benchmark_outputs)'
@@ -609,6 +626,8 @@ Examples:
             base_approaches.append('drift_graphrag')
         if NEO4J_VECTOR_AVAILABLE:
             base_approaches.append('neo4j_vector')
+        if HYBRID_CYPHER_AVAILABLE:
+            base_approaches.append('hybrid_cypher')
         approaches = base_approaches
     else:
         if args.chroma:
@@ -623,6 +642,8 @@ Examples:
             approaches.append('drift_graphrag')
         if getattr(args, 'neo4j_vector', False) and NEO4J_VECTOR_AVAILABLE:
             approaches.append('neo4j_vector')
+        if getattr(args, 'hybrid_cypher', False) and HYBRID_CYPHER_AVAILABLE:
+            approaches.append('hybrid_cypher')
     
     # If no approaches specified, default to all
     if not approaches:
@@ -634,6 +655,8 @@ Examples:
             default_approaches.append('drift_graphrag')
         if NEO4J_VECTOR_AVAILABLE:
             default_approaches.append('neo4j_vector')
+        if HYBRID_CYPHER_AVAILABLE:
+            default_approaches.append('hybrid_cypher')
         approaches = default_approaches
     
     return approaches, args.output_dir
@@ -647,7 +670,8 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs")
         'text2cypher': 'Text2Cypher',
         'advanced_graphrag': 'Advanced GraphRAG',
         'drift_graphrag': 'DRIFT GraphRAG',
-        'neo4j_vector': 'Neo4j Vector RAG'
+        'neo4j_vector': 'Neo4j Vector RAG',
+        'hybrid_cypher': 'Hybrid Cypher RAG'
     }
     
     selected_names = [approach_names[approach] for approach in approaches]

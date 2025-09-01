@@ -17,6 +17,16 @@ try:
     from .chroma_retriever import query_chroma_rag, create_chroma_retriever, ChromaRetriever
     from .graph_rag_retriever import query_graphrag, create_graphrag_retriever, GraphRAGRetriever 
     from .text2cypher_retriever import query_text2cypher_rag, create_text2cypher_retriever, Text2CypherRAGRetriever
+    from .hybrid_cypher_retriever import (
+        query_hybrid_cypher_rag,
+        create_hybrid_cypher_retriever,
+        HybridNeighborhoodRetriever
+    )
+    from .hybrid_cypher_min import (
+        query_hybrid_cypher_minimal,
+        create_hybrid_cypher_minimal,
+        HybridCypherMinimal,
+    )
     from .neo4j_vector_retriever import query_neo4j_vector_rag, create_neo4j_vector_retriever, Neo4jVectorRetriever
     
     # Advanced retrievers with conditional imports
@@ -93,6 +103,12 @@ AVAILABLE_RETRIEVERS = {
         'name': 'Neo4j Vector RAG',
         'description': 'Pure vector similarity search using Neo4j vector index',
         'available': query_neo4j_vector_rag is not None
+    },
+    'hybrid_cypher': {
+        'function': query_hybrid_cypher_rag,
+        'name': 'Hybrid Cypher RAG',
+        'description': 'Hybrid (vector + fulltext) with generic neighborhood expansion',
+        'available': query_hybrid_cypher_rag is not None
     }
 }
 
@@ -188,6 +204,7 @@ __all__ = [
     'GraphRAGRetriever',
     'Text2CypherRAGRetriever',
     'Neo4jVectorRetriever',
+    'HybridNeighborhoodRetriever',
     
     # Utility functions
     'get_available_retrievers',
