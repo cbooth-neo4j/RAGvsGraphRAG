@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 import neo4j
 from langchain_openai import ChatOpenAI
 from graphdatascience import GraphDataScience
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field 
 from langchain_core.prompts import ChatPromptTemplate
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm

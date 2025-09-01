@@ -47,7 +47,8 @@ class Disambiguate(BaseModel):
 class CustomGraphProcessor:
     def __init__(self):
         self.driver = neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        self.embeddings = OpenAIEmbeddings()
+        # IMPORTANT: Match vector index dimensions (1536). Use text-embedding-3-small.
+        self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
         self.llm = ChatOpenAI(model=LLM, temperature=0)
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,

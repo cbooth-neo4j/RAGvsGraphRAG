@@ -14,6 +14,7 @@ langchain-openai>=0.0.2
 langchain-community>=0.0.10
 langchain-chroma>=0.1.0
 langchain-neo4j>=0.1.0
+langgraph>=0.2.34
 
 # Vector databases and graph databases
 chromadb>=0.4.22
