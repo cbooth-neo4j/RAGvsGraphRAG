@@ -473,14 +473,43 @@ Summary:"""
                 RETURN count(*)
             """)
             
-            # Calculate community ranks based on document mentions
+            # Calculate community ranks based on text chunks (Neo4j LLM Graph Builder approach)
             session.run("""
-                MATCH (c:__Community__)<-[:IN_COMMUNITY*]-(:__Entity__)<-[:HAS_ENTITY]-(chunk:Chunk)-[:PART_OF]->(d:Document)
-                WITH c, count(distinct d) AS rank
-                SET c.community_rank = rank
+                MATCH (c:__Community__)<-[:IN_COMMUNITY*]-(:__Entity__)<-[:HAS_ENTITY]-(chunk:Chunk)
+                WITH c, count(distinct chunk) AS rank
+                SET c.community_rank = rank,
+                    c.rank_explanation = "number of text chunks in which entities within the community appear",
+                    c.title = CASE WHEN c.level = 0 THEN "Community " + split(c.id, "-")[1] 
+                                   ELSE "Level " + split(c.id, "-")[0] + " Community " + split(c.id, "-")[1] END,
+                    c.weight = toFloat(rank) / 100.0  // Normalized weight based on chunk frequency
             """)
             
             print("Community nodes and relationships created")
+    
+    def enhance_chunk_relationships(self):
+        """
+        Add LLM Graph Builder compatible chunk relationships:
+        1. SIMILAR relationships between chunks (threshold=0.95, not used for retrieval)
+        2. Additional chunk-community connections for graph completeness
+        """
+        print("Adding LLM Graph Builder compatible chunk relationships...")
+        
+        # Call the base class method for chunk similarity (matches LLM Graph Builder)
+        self.create_chunk_similarity_relationships(similarity_threshold=0.95)
+        
+        # Add additional chunk-based community relationships for graph completeness
+        with self.driver.session() as session:
+            # Connect chunks to communities through their entities
+            session.run("""
+                MATCH (chunk:Chunk)-[:HAS_ENTITY]->(entity:__Entity__)-[:IN_COMMUNITY]->(community:__Community__)
+                WITH chunk, community, count(distinct entity) as entity_count
+                WHERE entity_count >= 2  // Only connect if chunk has multiple entities in the community
+                MERGE (chunk)-[r:RELATES_TO_COMMUNITY]->(community)
+                SET r.entity_count = entity_count,
+                    r.strength = toFloat(entity_count) / 10.0  // Normalize strength
+            """)
+            
+            print("Chunk-community relationships created")
 
     def calculate_community_statistics(self) -> pd.DataFrame:
         """Calculate and return community statistics"""
@@ -812,7 +841,7 @@ Summary:"""
         final_stats = self._check_existing_graph()
         
         return {
-            "status": "success",
+            "status": "enhanced_existing_graph",
             "initial_stats": stats,
             "final_stats": final_stats
         }

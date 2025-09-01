@@ -2087,6 +2087,36 @@ def create_advanced_graphrag_retriever(
     else:
         raise ValueError(f"Unknown mode: {mode}. Must be 'local', 'global', or 'hybrid'")
 
+def query_advanced_graphrag_sync(query: str, **kwargs) -> Dict[str, Any]:
+    """Synchronous wrapper for query_advanced_graphrag"""
+    import asyncio
+    import sys
+    
+    def run_async():
+        """Run the async function in a clean environment"""
+        return asyncio.run(query_advanced_graphrag(query, **kwargs))
+    
+    # Always use asyncio.run in a clean way
+    try:
+        # Check if we're in a Jupyter notebook or similar environment
+        if 'ipykernel' in sys.modules:
+            import nest_asyncio
+            nest_asyncio.apply()
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(query_advanced_graphrag(query, **kwargs))
+        else:
+            # Standard environment - use asyncio.run
+            return asyncio.run(query_advanced_graphrag(query, **kwargs))
+    except RuntimeError as e:
+        if "cannot be called from a running event loop" in str(e):
+            # We're in a running event loop, use thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_async)
+                return future.result()
+        else:
+            raise e
+
 
 # ===== ADDITIONAL COMPATIBILITY CLASSES =====
 

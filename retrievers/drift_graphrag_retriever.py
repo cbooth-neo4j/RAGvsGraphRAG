@@ -813,6 +813,36 @@ def create_drift_retriever() -> DriftGraphRAGRetriever:
     config = DRIFTConfig()
     return DriftGraphRAGRetriever(processor, config)
 
+def query_drift_graphrag_sync(query: str, **kwargs) -> Dict[str, Any]:
+    """Synchronous wrapper for query_drift_graphrag"""
+    import asyncio
+    import sys
+    
+    def run_async():
+        """Run the async function in a clean environment"""
+        return asyncio.run(query_drift_graphrag(query, **kwargs))
+    
+    # Always use asyncio.run in a clean way
+    try:
+        # Check if we're in a Jupyter notebook or similar environment
+        if 'ipykernel' in sys.modules:
+            import nest_asyncio
+            nest_asyncio.apply()
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(query_drift_graphrag(query, **kwargs))
+        else:
+            # Standard environment - use asyncio.run
+            return asyncio.run(query_drift_graphrag(query, **kwargs))
+    except RuntimeError as e:
+        if "cannot be called from a running event loop" in str(e):
+            # We're in a running event loop, use thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_async)
+                return future.result()
+        else:
+            raise e
+
 if __name__ == "__main__":
     # Test the DRIFT retriever
     import asyncio

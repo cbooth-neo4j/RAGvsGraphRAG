@@ -35,6 +35,7 @@ from .drift_primer import DRIFTPrimer
 from .drift_state import DRIFTQueryState
 from .drift_action import DRIFTAction
 from .drift_search import DRIFTSearch, DRIFTConfig, query_drift_search, create_drift_search
+from .drift_query_classifier import DRIFTQueryClassifier, create_drift_query_classifier
 
 __all__ = [
     "DRIFTContextBuilder",
@@ -44,7 +45,9 @@ __all__ = [
     "DRIFTSearch",
     "DRIFTConfig",
     "query_drift_search",
-    "create_drift_search"
+    "create_drift_search",
+    "DRIFTQueryClassifier",
+    "create_drift_query_classifier"
 ]
 
 # Version info

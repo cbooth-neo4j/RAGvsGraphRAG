@@ -128,9 +128,9 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             elif approach == "text2cypher" and TEXT2CYPHER_AVAILABLE:
                 result = query_text2cypher_rag(query)
             elif approach == "advanced_graphrag" and ADVANCED_GRAPHRAG_AVAILABLE:
-                result = asyncio.run(query_advanced_graphrag(query, mode="hybrid", k=5))
+                result = query_advanced_graphrag(query, mode="hybrid", k=5)
             elif approach == "drift_graphrag" and DRIFT_GRAPHRAG_AVAILABLE:
-                result = asyncio.run(query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True))
+                result = query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True)
             elif approach == "neo4j_vector" and NEO4J_VECTOR_AVAILABLE:
                 result = query_neo4j_vector_rag(query, k=5)
             elif approach == "hybrid_cypher" and HYBRID_CYPHER_AVAILABLE:
