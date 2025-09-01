@@ -185,18 +185,21 @@ Research Results:
             self.local_retriever = GraphRAGLocalRetriever(self.graph_processor, shared_retriever)
             self.global_retriever = GraphRAGGlobalRetriever(self.graph_processor, shared_retriever)
             
-            # Try to initialize classifier if auto-routing is enabled
+            # Initialize DRIFT QueryClassifier for auto-routing
             if self.config.auto_route:
                 try:
-                    from ..old_advanced_graphrag_retriever import QueryClassifier
+                    from .drift_query_classifier import DRIFTQueryClassifier
                     if hasattr(self, 'llm') and self.llm is not None:
-                        self.classifier = QueryClassifier(self.llm)
+                        self.classifier = DRIFTQueryClassifier(self.llm)
+                        logger.info("DRIFT QueryClassifier initialized successfully for auto-routing")
                     else:
-                        logger.warning("LLM not available for QueryClassifier, disabling auto-routing")
+                        logger.warning("LLM not available for DRIFT QueryClassifier, disabling auto-routing")
                         self.classifier = None
+                        self.config.auto_route = False
                 except ImportError as ie:
-                    logger.warning(f"QueryClassifier not available: {ie}, disabling auto-routing")
+                    logger.warning(f"DRIFT QueryClassifier not available: {ie}, disabling auto-routing")
                     self.classifier = None
+                    self.config.auto_route = False
             else:
                 self.classifier = None
                 

@@ -20,19 +20,15 @@ try:
     from .hybrid_cypher_retriever import (
         query_hybrid_cypher_rag,
         create_hybrid_cypher_retriever,
-        HybridNeighborhoodRetriever
+        HybridCypherRAGRetriever
     )
-    from .hybrid_cypher_min import (
-        query_hybrid_cypher_minimal,
-        create_hybrid_cypher_minimal,
-        HybridCypherMinimal,
-    )
+
     from .neo4j_vector_retriever import query_neo4j_vector_rag, create_neo4j_vector_retriever, Neo4jVectorRetriever
     
     # Advanced retrievers with conditional imports
     try:
         from .advanced_graphrag_retriever import (
-            query_advanced_graphrag, 
+            query_advanced_graphrag_sync as query_advanced_graphrag, 
             create_advanced_graphrag_retriever,
             GraphRAGHybridRetriever
         )
@@ -45,7 +41,7 @@ try:
         GraphRAGHybridRetriever = None
     
     try:
-        from .drift_graphrag_retriever import query_drift_graphrag, create_drift_retriever, DriftGraphRAGRetriever
+        from .drift_graphrag_retriever import query_drift_graphrag_sync as query_drift_graphrag, create_drift_retriever, DriftGraphRAGRetriever
         DRIFT_GRAPHRAG_AVAILABLE = True
     except ImportError as e:
         print(f"DRIFT GraphRAG not available: {e}")
@@ -204,7 +200,7 @@ __all__ = [
     'GraphRAGRetriever',
     'Text2CypherRAGRetriever',
     'Neo4jVectorRetriever',
-    'HybridNeighborhoodRetriever',
+    'HybridCypherRAGRetriever',
     
     # Utility functions
     'get_available_retrievers',

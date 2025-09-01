@@ -3,11 +3,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from retrievers.hybrid_cypher_retriever import HybridNeighborhoodRetriever
+from retrievers.hybrid_cypher_retriever import HybridCypherRAGRetriever
 
 
 def main():
-    retriever = HybridNeighborhoodRetriever()
+    retriever = HybridCypherRAGRetriever()
     try:
         query = "banking services"
         print(f"Query: {query}")

@@ -238,6 +238,25 @@ Please identify duplicates, merge them, and provide the merged list.
                 except Exception as e:
                     print(f"Constraint may already exist: {e}")
             
+            # Create full-text indexes first (required for Neo4j GraphRAG compatibility)
+            fulltext_indexes = [
+                """
+                CREATE FULLTEXT INDEX entity_fulltext_idx IF NOT EXISTS
+                FOR (e:__Entity__) ON e.name, e.description
+                """,
+                """
+                CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS
+                FOR (c:Chunk) ON c.text
+                """
+            ]
+            
+            for index in fulltext_indexes:
+                try:
+                    session.run(index)
+                    print("Created full-text index")
+                except Exception as e:
+                    print(f"Full-text index may already exist: {e}")
+            
             # Create vector indexes for embeddings
             vector_indexes = [
                 """
@@ -381,7 +400,7 @@ Please identify duplicates, merge them, and provide the merged list.
             chunk_ids = []
             
             # Process each chunk
-            for chunk in chunks:
+            for i, chunk in enumerate(chunks):
                 chunk_id = f"{doc_id}_chunk_{chunk['index']}"
                 chunk_ids.append(chunk_id)
                 
@@ -408,6 +427,22 @@ Please identify duplicates, merge them, and provide the merged list.
                     CREATE (c)-[:PART_OF]->(d)
                 """, doc_id=doc_id, chunk_id=chunk_id)
                 
+                # Create FIRST_CHUNK and NEXT_CHUNK relationships for document sequencing
+                if i == 0:
+                    # Mark first chunk
+                    session.run("""
+                        MATCH (d:Document {id: $doc_id}), (c:Chunk {id: $chunk_id})
+                        CREATE (d)-[:FIRST_CHUNK]->(c)
+                    """, doc_id=doc_id, chunk_id=chunk_id)
+                
+                if i > 0:
+                    # Link to previous chunk
+                    prev_chunk_id = f"{doc_id}_chunk_{chunks[i-1]['index']}"
+                    session.run("""
+                        MATCH (prev:Chunk {id: $prev_chunk_id}), (curr:Chunk {id: $chunk_id})
+                        CREATE (prev)-[:NEXT_CHUNK]->(curr)
+                    """, prev_chunk_id=prev_chunk_id, chunk_id=chunk_id)
+                
                 # Extract and process entities for this chunk
                 entities = self.extract_entities(chunk['text'])
                 
@@ -415,7 +450,11 @@ Please identify duplicates, merge them, and provide the merged list.
                 chunk_entity_ids = []
                 
                 # Create entity nodes with embeddings and HAS_ENTITY relationships
+                # Add counter for human_readable_id
+                entity_counter = 0
+                
                 for org in entities['organizations']:
+                    entity_counter += 1
                     org_name = org['text']
                     org_description = org.get('description', '')
                     # Create embedding from both name and description
@@ -424,17 +463,19 @@ Please identify duplicates, merge them, and provide the merged list.
                     session.run("""
                         MERGE (o:Organization:__Entity__ {name: $name})
                         ON CREATE SET o.description = $description, o.embedding = $embedding,
-                                    o.id = $name, o.entity_type = 'Organization'
+                                    o.id = $name, o.entity_type = 'Organization', o.human_readable_id = $human_id
                         ON MATCH SET o.description = CASE WHEN o.description IS NULL THEN $description ELSE o.description END,
                                    o.embedding = CASE WHEN o.embedding IS NULL THEN $embedding ELSE o.embedding END,
-                                   o.id = $name, o.entity_type = 'Organization'
+                                   o.id = $name, o.entity_type = 'Organization',
+                                   o.human_readable_id = CASE WHEN o.human_readable_id IS NULL THEN $human_id ELSE o.human_readable_id END
                         WITH o
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(o)
-                    """, name=org_name, description=org_description, embedding=org_embedding, chunk_id=chunk_id)
+                    """, name=org_name, description=org_description, embedding=org_embedding, chunk_id=chunk_id, human_id=entity_counter)
                     chunk_entity_ids.append(('Organization', org_name))
                 
                 for loc in entities['locations']:
+                    entity_counter += 1
                     loc_name = loc['text']
                     loc_description = loc.get('description', '')
                     # Create embedding from both name and description
@@ -443,17 +484,19 @@ Please identify duplicates, merge them, and provide the merged list.
                     session.run("""
                         MERGE (l:Location:__Entity__ {name: $name})
                         ON CREATE SET l.description = $description, l.embedding = $embedding,
-                                    l.id = $name, l.entity_type = 'Location'
+                                    l.id = $name, l.entity_type = 'Location', l.human_readable_id = $human_id
                         ON MATCH SET l.description = CASE WHEN l.description IS NULL THEN $description ELSE l.description END,
                                    l.embedding = CASE WHEN l.embedding IS NULL THEN $embedding ELSE l.embedding END,
-                                   l.id = $name, l.entity_type = 'Location'
+                                   l.id = $name, l.entity_type = 'Location',
+                                   l.human_readable_id = CASE WHEN l.human_readable_id IS NULL THEN $human_id ELSE l.human_readable_id END
                         WITH l
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(l)
-                    """, name=loc_name, description=loc_description, embedding=loc_embedding, chunk_id=chunk_id)
+                    """, name=loc_name, description=loc_description, embedding=loc_embedding, chunk_id=chunk_id, human_id=entity_counter)
                     chunk_entity_ids.append(('Location', loc_name))
                 
                 for date in entities['dates']:
+                    entity_counter += 1
                     date_name = date['text']
                     date_description = date.get('description', '')
                     # Create embedding from both name and description
@@ -462,17 +505,19 @@ Please identify duplicates, merge them, and provide the merged list.
                     session.run("""
                         MERGE (dt:Date:__Entity__ {name: $name})
                         ON CREATE SET dt.description = $description, dt.embedding = $embedding,
-                                    dt.id = $name, dt.entity_type = 'Date'
+                                    dt.id = $name, dt.entity_type = 'Date', dt.human_readable_id = $human_id
                         ON MATCH SET dt.description = CASE WHEN dt.description IS NULL THEN $description ELSE dt.description END,
                                    dt.embedding = CASE WHEN dt.embedding IS NULL THEN $embedding ELSE dt.embedding END,
-                                   dt.id = $name, dt.entity_type = 'Date'
+                                   dt.id = $name, dt.entity_type = 'Date',
+                                   dt.human_readable_id = CASE WHEN dt.human_readable_id IS NULL THEN $human_id ELSE dt.human_readable_id END
                         WITH dt
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(dt)
-                    """, name=date_name, description=date_description, embedding=date_embedding, chunk_id=chunk_id)
+                    """, name=date_name, description=date_description, embedding=date_embedding, chunk_id=chunk_id, human_id=entity_counter)
                     chunk_entity_ids.append(('Date', date_name))
                 
                 for req in entities['requirements']:
+                    entity_counter += 1
                     req_name = req['text']  # GPT-4o-mini already provides concise requirements
                     req_description = req.get('description', '')
                     # Create embedding from both name and description
@@ -481,17 +526,19 @@ Please identify duplicates, merge them, and provide the merged list.
                     session.run("""
                         MERGE (r:Requirement:__Entity__ {name: $name})
                         ON CREATE SET r.description = $description, r.embedding = $embedding,
-                                    r.id = $name, r.entity_type = 'Requirement'
+                                    r.id = $name, r.entity_type = 'Requirement', r.human_readable_id = $human_id
                         ON MATCH SET r.description = CASE WHEN r.description IS NULL THEN $description ELSE r.description END,
                                    r.embedding = CASE WHEN r.embedding IS NULL THEN $embedding ELSE r.embedding END,
-                                   r.id = $name, r.entity_type = 'Requirement'
+                                   r.id = $name, r.entity_type = 'Requirement',
+                                   r.human_readable_id = CASE WHEN r.human_readable_id IS NULL THEN $human_id ELSE r.human_readable_id END
                         WITH r
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(r)
-                    """, name=req_name, description=req_description, embedding=req_embedding, chunk_id=chunk_id)
+                    """, name=req_name, description=req_description, embedding=req_embedding, chunk_id=chunk_id, human_id=entity_counter)
                     chunk_entity_ids.append(('Requirement', req_name))
                 
                 for person in entities['persons']:
+                    entity_counter += 1
                     person_name = person['text']
                     person_description = person.get('description', '')
                     # Create embedding from both name and description
@@ -500,17 +547,19 @@ Please identify duplicates, merge them, and provide the merged list.
                     session.run("""
                         MERGE (p:Person:__Entity__ {name: $name})
                         ON CREATE SET p.description = $description, p.embedding = $embedding,
-                                    p.id = $name, p.entity_type = 'Person'
+                                    p.id = $name, p.entity_type = 'Person', p.human_readable_id = $human_id
                         ON MATCH SET p.description = CASE WHEN p.description IS NULL THEN $description ELSE p.description END,
                                    p.embedding = CASE WHEN p.embedding IS NULL THEN $embedding ELSE p.embedding END,
-                                   p.id = $name, p.entity_type = 'Person'
+                                   p.id = $name, p.entity_type = 'Person',
+                                   p.human_readable_id = CASE WHEN p.human_readable_id IS NULL THEN $human_id ELSE p.human_readable_id END
                         WITH p
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(p)
-                    """, name=person_name, description=person_description, embedding=person_embedding, chunk_id=chunk_id)
+                    """, name=person_name, description=person_description, embedding=person_embedding, chunk_id=chunk_id, human_id=entity_counter)
                     chunk_entity_ids.append(('Person', person_name))
                 
                 for financial in entities['financial']:
+                    entity_counter += 1
                     financial_name = financial['text']
                     financial_description = financial.get('description', '')
                     # Create embedding from both name and description
@@ -519,14 +568,15 @@ Please identify duplicates, merge them, and provide the merged list.
                     session.run("""
                         MERGE (f:Financial:__Entity__ {name: $name})
                         ON CREATE SET f.description = $description, f.embedding = $embedding,
-                                    f.id = $name, f.entity_type = 'Financial'
+                                    f.id = $name, f.entity_type = 'Financial', f.human_readable_id = $human_id
                         ON MATCH SET f.description = CASE WHEN f.description IS NULL THEN $description ELSE f.description END,
                                    f.embedding = CASE WHEN f.embedding IS NULL THEN $embedding ELSE f.embedding END,
-                                   f.id = $name, f.entity_type = 'Financial'
+                                   f.id = $name, f.entity_type = 'Financial',
+                                   f.human_readable_id = CASE WHEN f.human_readable_id IS NULL THEN $human_id ELSE f.human_readable_id END
                         WITH f
                         MERGE (c:Chunk {id: $chunk_id})
                         MERGE (c)-[:HAS_ENTITY]->(f)
-                    """, name=financial_name, description=financial_description, embedding=financial_embedding, chunk_id=chunk_id)
+                    """, name=financial_name, description=financial_description, embedding=financial_embedding, chunk_id=chunk_id, human_id=entity_counter)
                     chunk_entity_ids.append(('Financial', financial_name))
                 
                 # Create RELATES_TO relationships between entities in the same chunk
@@ -567,6 +617,56 @@ Please identify duplicates, merge them, and provide the merged list.
                 print(f"❌ Error during entity resolution: {e}")
         
         return results
+    
+    def create_chunk_similarity_relationships(self, similarity_threshold: float = 0.95):
+        """
+        Create SIMILAR relationships between chunks based on embedding similarity.
+        Matches LLM Graph Builder implementation (threshold=0.95, not used for retrieval).
+        """
+        print(f"Creating chunk similarity relationships with threshold {similarity_threshold}")
+        
+        try:
+            # Create graph projection for chunks
+            with self.driver.session() as session:
+                # Drop existing projection if it exists
+                try:
+                    self.gds.graph.drop("chunk_similarity_graph")
+                except:
+                    pass
+                
+                # Create new projection
+                G_chunks = self.gds.graph.project(
+                    "chunk_similarity_graph",
+                    "Chunk",
+                    "*",
+                    nodeProperties=["embedding"]
+                )
+                
+                # Create k-nearest neighbor relationships between chunks
+                self.gds.knn.mutate(
+                    G_chunks,
+                    nodeProperties=['embedding'],
+                    mutateRelationshipType='SIMILAR',
+                    mutateProperty='similarity_score',
+                    similarityCutoff=similarity_threshold,
+                    topK=5  # Each chunk connects to top 5 similar chunks
+                )
+                
+                # Write back to Neo4j
+                self.gds.graph.writeRelationship(
+                    G_chunks,
+                    relationshipType="SIMILAR",
+                    relationshipProperty="similarity_score"
+                )
+                
+                # Clean up projection
+                self.gds.graph.drop(G_chunks)
+                
+                print(f"Chunk similarity relationships created successfully")
+                
+        except Exception as e:
+            print(f"Error creating chunk similarity relationships: {e}")
+            # Continue without chunk similarities - not critical for basic functionality
     
     def close(self):
         """Close database connection"""

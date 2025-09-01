@@ -133,9 +133,10 @@ python benchmark/ragas_benchmark.py --graphrag --advanced-graphrag --drift-graph
 python benchmark/ragas_benchmark.py --chroma               # ChromaDB only
 python benchmark/ragas_benchmark.py --graphrag             # GraphRAG only
 python benchmark/ragas_benchmark.py --advanced-graphrag    # Advanced GraphRAG only
+python benchmark/ragas_benchmark.py --hybrid-cypher #      # Hybrid cypher only
 python benchmark/ragas_benchmark.py --drift-graphrag       # DRIFT GraphRAG only
 python benchmark/ragas_benchmark.py --text2cypher          # Text2Cypher only
-python benchmark/ragas_benchmark.py --neo4j-vector        # Neo4j Vector only
+python benchmark/ragas_benchmark.py --neo4j-vector         # Neo4j Vector only
 
 # Custom output directory
 python benchmark/ragas_benchmark.py --all --output-dir my_results
