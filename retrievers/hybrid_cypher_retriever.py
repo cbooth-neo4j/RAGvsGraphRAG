@@ -4,16 +4,18 @@ Hybrid Cypher Retriever - Vector + Full-text Search with Graph Traversal
 This module implements a HybridCypherRetriever using Neo4j's built-in HybridCypherRetriever
 that combines vector similarity search with full-text search and performs 1-hop graph 
 traversal for enhanced context retrieval.
+Supports both OpenAI API and Ollama local models.
 """
 
 import os
 from dotenv import load_dotenv
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import neo4j
-from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
-from neo4j_graphrag.llm import OpenAILLM
 from neo4j_graphrag.retrievers import HybridCypherRetriever
 import warnings
+
+# Import centralized configuration
+from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm
 
 # Load environment variables
 load_dotenv()
@@ -26,17 +28,6 @@ NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 # Index names for entity-focused hybrid search (Local Entity HybridCypherRetriever)
 VECTOR_INDEX_NAME = "entity_embedding"  # Vector index on __Entity__.embedding
 FULLTEXT_INDEX_NAME = "entity_fulltext_idx"  # Full-text index on __Entity__.name, description
-
-# Initialize components with deterministic settings
-SEED = 42
-embeddings = OpenAIEmbeddings()
-llm = OpenAILLM(
-    model_name="gpt-4o-mini",
-    model_params={
-        "temperature": 0,
-        "seed": SEED
-    }
-)
 
 class HybridCypherRAGRetriever:
     """
@@ -51,9 +42,21 @@ class HybridCypherRAGRetriever:
     3. Returns structured context with entities, chunks, communities, and relationships
     """
 
-    def __init__(self):
-        self.embeddings = embeddings
-        self.llm = llm
+    def __init__(self, model_config: Optional[Any] = None):
+        self.config = model_config or get_model_config()
+        
+        # Initialize models based on configuration
+        try:
+            self.embeddings = get_neo4j_embeddings()
+            self.llm = get_neo4j_llm()
+        except Exception as e:
+            warnings.warn(f"Could not initialize configured models, falling back to defaults: {e}")
+            # Fallback imports for backward compatibility
+            from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
+            from neo4j_graphrag.llm import OpenAILLM
+            self.embeddings = OpenAIEmbeddings()
+            self.llm = OpenAILLM(model_name="gpt-4o-mini", model_params={"temperature": 0})
+        
         self.neo4j_uri = NEO4J_URI
         self.neo4j_user = NEO4J_USER
         self.neo4j_password = NEO4J_PASSWORD
@@ -378,9 +381,9 @@ Please provide a comprehensive, entity-focused response."""
 
 
 # Factory function for easy instantiation
-def create_hybrid_cypher_retriever() -> HybridCypherRAGRetriever:
-    """Create a Hybrid Cypher RAG retriever instance"""
-    return HybridCypherRAGRetriever()
+def create_hybrid_cypher_retriever(model_config: Optional[Any] = None) -> HybridCypherRAGRetriever:
+    """Create a Hybrid Cypher RAG retriever instance with configurable models"""
+    return HybridCypherRAGRetriever(model_config)
 
 
 # Main interface function for integration with benchmark system

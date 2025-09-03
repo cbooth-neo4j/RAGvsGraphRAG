@@ -9,10 +9,11 @@ import os
 from dotenv import load_dotenv
 from typing import Dict, Any
 import neo4j
-from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
-from neo4j_graphrag.llm import OpenAILLM
 from neo4j_graphrag.retrievers import Text2CypherRetriever
 from langchain_neo4j import Neo4jGraph
+
+# Import centralized configuration
+from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, ModelProvider
 
 # Load environment variables
 load_dotenv()
@@ -22,18 +23,12 @@ NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 
-# Initialize components with deterministic settings
+# Initialize components with centralized configuration
 SEED = 42
-embeddings = OpenAIEmbeddings()
+embeddings = get_neo4j_embeddings()
 
-# Use GPT-4o-mini for better Cypher query generation
-text2cypher_llm = OpenAILLM(
-    model_name="gpt-4o-mini", 
-    model_params={
-        "temperature": 0,
-        "seed": SEED
-    }
-)
+# Use centralized LLM configuration for Cypher query generation
+text2cypher_llm = get_neo4j_llm()
 
 class Text2CypherRAGRetriever:
     """Text2Cypher retriever with natural language to Cypher conversion"""

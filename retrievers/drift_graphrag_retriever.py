@@ -25,9 +25,11 @@ from dataclasses import dataclass
 from tqdm.asyncio import tqdm as atqdm
 
 # Core dependencies
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 import networkx as nx
+
+# Import centralized configuration
+from config import get_model_config, get_embeddings, get_llm, ModelProvider
 import numpy as np
 from dotenv import load_dotenv
 
@@ -268,8 +270,8 @@ class PrimerQueryProcessor:
     def __init__(self, graph_processor: AdvancedGraphProcessor, config: DRIFTConfig):
         self.graph = graph_processor
         self.config = config
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=config.temperature)
-        self.embeddings = OpenAIEmbeddings()
+        self.llm = get_llm()
+        self.embeddings = get_embeddings()
         
         # Primer prompt for query decomposition
         self.primer_prompt = ChatPromptTemplate.from_messages([
@@ -460,7 +462,7 @@ class DriftGraphRAGRetriever:
         self.primer = PrimerQueryProcessor(graph_processor, self.config)
         self.local_search = GraphRAGLocalRetriever(graph_processor)
         self.query_state = QueryState()
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=self.config.temperature)
+        self.llm = get_llm()
         
         # Reduce phase prompt
         self.reduce_prompt = ChatPromptTemplate.from_messages([

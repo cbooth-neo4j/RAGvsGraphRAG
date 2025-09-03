@@ -16,9 +16,10 @@ from dotenv import load_dotenv
 # Neo4j and GraphRAG imports
 from neo4j import GraphDatabase
 from neo4j_graphrag.retrievers import VectorRetriever
-from neo4j_graphrag.llm import OpenAILLM
 from neo4j_graphrag.generation import GraphRAG
-from neo4j_graphrag.embeddings import OpenAIEmbeddings
+
+# Import centralized configuration
+from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, ModelProvider
 
 # Load environment variables
 load_dotenv()
@@ -29,16 +30,10 @@ NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 INDEX_NAME = "chunk_embedding" 
 
-# Initialize embeddings and LLM
+# Initialize embeddings and LLM using centralized configuration
 SEED = 42
-embeddings = OpenAIEmbeddings() 
-llm = OpenAILLM(
-    model_name="gpt-4o-mini", 
-    model_params={
-        "temperature": 0,
-        "seed": SEED
-    }
-)
+embeddings = get_neo4j_embeddings()
+llm = get_neo4j_llm()
 
 
 class Neo4jVectorRetriever:

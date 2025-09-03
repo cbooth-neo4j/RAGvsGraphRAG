@@ -18,18 +18,20 @@ from abc import ABC, abstractmethod
 import tiktoken
 
 # Core dependencies
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 import neo4j
 from dotenv import load_dotenv
 
+# Import centralized configuration
+from config import get_model_config, get_embeddings, get_llm, ModelProvider
+
 # Import our graph processor
-from data_processors import AdvancedGraphProcessor
+from data_processors import CustomGraphProcessor as AdvancedGraphProcessor
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-LLM = os.environ.get('OPENAI_MODEL_NAME', 'gpt-4o-mini')  # Default to gpt-4o-mini if not set
+# Configuration is now handled by centralized config system
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +140,7 @@ class ContextBuilderResult:
 class Neo4jVectorStore:
     """Vector store abstraction for Neo4j with optimized similarity search capabilities."""
     
-    def __init__(self, driver: neo4j.GraphDatabase.driver, embedding_model: OpenAIEmbeddings):
+    def __init__(self, driver: neo4j.GraphDatabase.driver, embedding_model):
         self.driver = driver
         self.embedding_model = embedding_model
         self.token_encoder = tiktoken.get_encoding("cl100k_base")
@@ -198,9 +200,9 @@ class Neo4jVectorStore:
                            node.description as description,
                            node.human_readable_id as human_readable_id,
                            node.embedding as description_embedding,
-                           node.text_unit_ids as text_unit_ids,
-                           node.community_ids as community_ids,
-                           node.rank as rank,
+                           [] as text_unit_ids,
+                           CASE WHEN node.communityId IS NOT NULL THEN node.communityId ELSE [] END as community_ids,
+                           coalesce(node.human_readable_id, 0) as rank,
                            score
                     ORDER BY score DESC
                     LIMIT $k
@@ -249,7 +251,7 @@ class Neo4jVectorStore:
                      ELSE 0.1
                  END as score
             WHERE score > 0.1
-            OPTIONAL MATCH (e)-[r:RELATES_TO]-()
+            OPTIONAL MATCH (e)-[r:RELATED_TO]-()
             WITH e, score, count(r) as rel_count
             RETURN e.id as id,
                    e.name as title,
@@ -257,9 +259,9 @@ class Neo4jVectorStore:
                    e.description as description,
                    coalesce(e.human_readable_id, 0) as human_readable_id,
                    e.embedding as description_embedding,
-                   e.text_unit_ids as text_unit_ids,
-                   e.community_ids as community_ids,
-                   coalesce(e.rank, rel_count) as rank,
+                   [] as text_unit_ids,
+                   CASE WHEN e.communityId IS NOT NULL THEN e.communityId ELSE [] END as community_ids,
+                   coalesce(e.human_readable_id, rel_count) as rank,
                    score
             ORDER BY score DESC, rank DESC
             LIMIT $k
@@ -291,7 +293,7 @@ def num_tokens(text: str, token_encoder: tiktoken.Encoding) -> int:
 def map_query_to_entities(
         query: str, 
     text_embedding_vectorstore: Neo4jVectorStore,
-    text_embedder: OpenAIEmbeddings,
+    text_embedder,
     all_entities_dict: Dict[str, Entity],
     k: int = 10,
     oversample_scaler: int = 2,
@@ -436,9 +438,9 @@ class Neo4jDataLoader:
                 MATCH (e:__Entity__)
                 OPTIONAL MATCH (c:Chunk)-[:HAS_ENTITY]->(e)
                 WITH e, collect(DISTINCT c.id) as text_unit_ids, count(c) as mention_count
-                OPTIONAL MATCH (e)-[:IN_COMMUNITY]->(comm:__Community__)
-                WITH e, text_unit_ids, mention_count, collect(DISTINCT comm.id) as community_ids
-                OPTIONAL MATCH (e)-[r:RELATES_TO]-()
+                WITH e, text_unit_ids, mention_count, 
+                     CASE WHEN e.communityId IS NOT NULL THEN e.communityId ELSE [] END as community_ids
+                OPTIONAL MATCH (e)-[r:RELATED_TO]-()
                 WITH e, text_unit_ids, mention_count, community_ids, count(r) as relationship_count
                 RETURN e.id as id,
                        e.name as title,
@@ -469,21 +471,21 @@ class Neo4jDataLoader:
         return entities
     
     def load_relationships(self) -> Dict[str, Relationship]:
-        """Load relationships from Neo4j RELATES_TO relationships."""
+        """Load relationships from Neo4j RELATED_TO relationships."""
         relationships = {}
         
         with self.driver.session() as session:
             result = session.run("""
-                MATCH (e1:__Entity__)-[r:RELATES_TO]->(e2:__Entity__)
-                RETURN r.id as id,
+                MATCH (e1:__Entity__)-[r:RELATED_TO]->(e2:__Entity__)
+                RETURN elementId(r) as id,
                        e1.name as source,
                        e2.name as target,
-                       coalesce(r.description, 'co-occurs with') as description,
-                       coalesce(r.co_occurrences, 1.0) as weight,
+                       coalesce(r.evidence, 'related to') as description,
+                       coalesce(r.count, r.confidence, 1.0) as weight,
                        coalesce(r.human_readable_id, 0) as human_readable_id,
-                       coalesce(r.rank, r.co_occurrences, 1) as rank,
-                       COUNT { (e1)-[:RELATES_TO]-() } as source_degree,
-                       COUNT { (e2)-[:RELATES_TO]-() } as target_degree
+                       coalesce(r.count, r.confidence, 1) as rank,
+                       COUNT { (e1)-[:RELATED_TO]-() } as source_degree,
+                       COUNT { (e2)-[:RELATED_TO]-() } as target_degree
             """).data()
             
             for i, record in enumerate(result):
@@ -840,7 +842,7 @@ class LocalSearchMixedContext(LocalContextBuilder):
         self,
         entities: Dict[str, Entity],
         entity_text_embeddings: Neo4jVectorStore,
-        text_embedder: OpenAIEmbeddings,
+        text_embedder,
         text_units: Optional[Dict[str, TextUnit]] = None,
         community_reports: Optional[List[CommunityReport]] = None,
         relationships: Optional[Dict[str, Relationship]] = None,
@@ -1211,7 +1213,7 @@ class LocalSearch:
     
     def __init__(
         self,
-        model: ChatOpenAI,
+        model,
         context_builder: LocalContextBuilder,
         token_encoder: Optional[tiktoken.Encoding] = None,
         system_prompt: Optional[str] = None,
@@ -1376,7 +1378,7 @@ class GlobalSearch:
     
     def __init__(
         self,
-        model: ChatOpenAI,
+        model,
         context_builder: GlobalContextBuilder,
         token_encoder: Optional[tiktoken.Encoding] = None,
         map_system_prompt: Optional[str] = None,
@@ -1402,8 +1404,13 @@ class GlobalSearch:
         self.map_llm_params = map_llm_params or {}
         self.reduce_llm_params = reduce_llm_params or {}
         
+        # Note: Ollama doesn't support response_format, so we skip JSON mode for Ollama
         if json_mode:
-            self.map_llm_params["response_format"] = {"type": "json_object"}
+            # Check if we're using Ollama and skip response_format if so
+            from config import get_model_config
+            config = get_model_config()
+            if config.llm_provider.value != "ollama":
+                self.map_llm_params["response_format"] = {"type": "json_object"}
         else:
             self.map_llm_params.pop("response_format", None)
             
@@ -1677,17 +1684,176 @@ class GlobalSearch:
             )
 
 
+# Helper functions for Advanced GraphRAG context transformation
+
+def _is_advanced_graphrag_format(text: str) -> bool:
+    """Check if text is in Advanced GraphRAG structured format."""
+    return "-----Entities-----" in text or "-----Reports-----" in text
+
+
+def _extract_section(text: str, start_marker: str, end_marker: str = None) -> str:
+    """Extract a section between markers."""
+    start_idx = text.find(start_marker)
+    if start_idx == -1:
+        return ""
+    
+    start_idx += len(start_marker)
+    
+    if end_marker:
+        end_idx = text.find(end_marker, start_idx)
+        if end_idx != -1:
+            return text[start_idx:end_idx].strip()
+    
+    return text[start_idx:].strip()
+
+
+def _parse_entities_to_natural_text(entities_section: str) -> str:
+    """Convert entities section to natural language."""
+    if not entities_section:
+        return ""
+    
+    natural_descriptions = []
+    
+    # Split by lines and process each entity
+    lines = entities_section.split('\n')
+    current_entity = None
+    current_description = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Check if this is a new entity (has ID pattern)
+        if line.count('_') > 0 and len(line.split()) > 2:
+            # Save previous entity if exists
+            if current_entity and current_description:
+                desc = ' '.join(current_description)
+                # Clean up the entity name
+                entity_name = current_entity.split('_', 1)[-1] if '_' in current_entity else current_entity
+                entity_name = entity_name.replace('_', ' ')
+                natural_descriptions.append(f"{entity_name}: {desc}")
+            
+            # Start new entity
+            parts = line.split(None, 2)  # Split into at most 3 parts
+            if len(parts) >= 3:
+                current_entity = parts[1]  # Second part is usually the entity name
+                current_description = [parts[2]]  # Rest is description
+            else:
+                current_entity = line
+                current_description = []
+        else:
+            # Continuation of current description
+            if current_entity:
+                current_description.append(line)
+    
+    # Don't forget the last entity
+    if current_entity and current_description:
+        desc = ' '.join(current_description)
+        entity_name = current_entity.split('_', 1)[-1] if '_' in current_entity else current_entity
+        entity_name = entity_name.replace('_', ' ')
+        natural_descriptions.append(f"{entity_name}: {desc}")
+    
+    return '. '.join(natural_descriptions) if natural_descriptions else ""
+
+
+def _parse_reports_to_natural_text(reports_section: str) -> str:
+    """Convert reports/community section to natural language."""
+    if not reports_section:
+        return ""
+    
+    summaries = []
+    
+    # Split by "Community:" markers
+    parts = reports_section.split('Community:')
+    
+    for part in parts[1:]:  # Skip first empty part
+        if not part.strip():
+            continue
+            
+        lines = part.strip().split('\n')
+        if len(lines) < 2:
+            continue
+            
+        # First line has community info, look for "Content:" marker
+        content_start = -1
+        for i, line in enumerate(lines):
+            if line.strip().startswith('Content:'):
+                content_start = i
+                break
+        
+        if content_start != -1 and content_start + 1 < len(lines):
+            # Extract content after "Content:" marker
+            content_lines = lines[content_start + 1:]
+            content = ' '.join(line.strip() for line in content_lines if line.strip())
+            
+            if content:
+                # Clean up and truncate if too long
+                if len(content) > 300:
+                    content = content[:300] + "..."
+                summaries.append(content)
+    
+    return '. '.join(summaries) if summaries else ""
+
+
+def _transform_advanced_graphrag_context(text: str) -> str:
+    """Transform Advanced GraphRAG structured output into RAGAS-friendly natural language."""
+    natural_parts = []
+    
+    # Extract and transform entities section
+    entities_section = _extract_section(text, "-----Entities-----", "-----Reports-----")
+    if not entities_section:
+        entities_section = _extract_section(text, "-----Entities-----")
+    
+    if entities_section:
+        entity_descriptions = _parse_entities_to_natural_text(entities_section)
+        if entity_descriptions:
+            natural_parts.append(f"Relevant entities and services: {entity_descriptions}")
+    
+    # Extract and transform reports section
+    reports_section = _extract_section(text, "-----Reports-----")
+    if reports_section:
+        community_summaries = _parse_reports_to_natural_text(reports_section)
+        if community_summaries:
+            natural_parts.append(f"Context summaries: {community_summaries}")
+    
+    # If we couldn't parse anything, return a cleaned version of the original
+    if not natural_parts:
+        # Basic cleanup - remove technical markers
+        cleaned = text.replace("-----Entities-----", "").replace("-----Reports-----", "")
+        cleaned = ' '.join(cleaned.split())  # Normalize whitespace
+        return cleaned if cleaned else text
+    
+    return '\n\n'.join(natural_parts)
+
+
 # Helper function to normalize context text for RAGAS compatibility
 def _normalize_context_text(context_text: str | List[str] | Dict[str, str]) -> str:
-    """Normalize context text to a string for RAGAS compatibility."""
+    """
+    Normalize and transform context text to a RAGAS-friendly format.
+    
+    For Advanced GraphRAG structured output, this transforms:
+    - "-----Entities-----" sections into natural descriptions
+    - "-----Reports-----" sections into readable summaries
+    - Entity IDs and technical metadata into plain text
+    
+    For other formats, performs basic normalization.
+    """
+    # Convert to string first
     if isinstance(context_text, str):
-        return context_text
+        text = context_text
     elif isinstance(context_text, list):
-        return "\n\n".join(context_text)
+        text = "\n\n".join(context_text)
     elif isinstance(context_text, dict):
-        return "\n\n".join(f"{k}: {v}" for k, v in context_text.items())
+        text = "\n\n".join(f"{k}: {v}" for k, v in context_text.items())
     else:
-        return str(context_text)
+        text = str(context_text)
+    
+    # Check if this is Advanced GraphRAG structured output
+    if _is_advanced_graphrag_format(text):
+        return _transform_advanced_graphrag_context(text)
+    
+    return text
 
 
 # Integration Layer for Existing Benchmark System
@@ -1697,8 +1863,8 @@ class AdvancedGraphRAGRetriever:
     def __init__(self, graph_processor: AdvancedGraphProcessor):
         self.graph_processor = graph_processor
         self.driver = graph_processor.driver
-        self.embeddings = OpenAIEmbeddings()
-        self.llm = ChatOpenAI(model=LLM, temperature=0)
+        self.embeddings = get_embeddings()
+        self.llm = get_llm()
         
         # Initialize data loader
         self.data_loader = Neo4jDataLoader(self.driver)
@@ -1819,6 +1985,139 @@ class AdvancedGraphRAGRetriever:
         self.graph_processor.close()
 
 
+# Lightweight retriever for benchmarking (no processor initialization overhead)
+class LightweightAdvancedGraphRAGRetriever:
+    """Lightweight retriever that connects directly to Neo4j without processor initialization."""
+    
+    def __init__(self):
+        """Initialize with direct Neo4j connection."""
+        # Load environment variables
+        load_dotenv()
+        
+        # Get Neo4j connection details
+        neo4j_uri = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
+        neo4j_user = os.getenv('NEO4J_USER', 'neo4j')
+        neo4j_password = os.getenv('NEO4J_PASSWORD', 'password')
+        
+        self.driver = neo4j.GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        self.embeddings = get_embeddings()
+        self.llm = get_llm()
+        
+        # Initialize data loader
+        self.data_loader = Neo4jDataLoader(self.driver)
+        
+        # Load data from existing graph (lightweight)
+        self._load_graph_data()
+        
+        # Initialize context builders
+        self._initialize_context_builders()
+        
+        # Initialize search engines
+        self._initialize_search_engines()
+    
+    def _load_graph_data(self):
+        """Load data from existing Neo4j graph (silent)."""
+        self.entities = self.data_loader.load_entities()
+        self.relationships = self.data_loader.load_relationships()
+        self.text_units = self.data_loader.load_text_units()
+        self.communities = self.data_loader.load_communities()
+        self.community_reports = self.data_loader.load_community_reports()
+    
+    def _initialize_context_builders(self):
+        """Initialize context builders."""
+        # Vector store for entity embeddings
+        self.vector_store = Neo4jVectorStore(self.driver, self.embeddings)
+        
+        # Local context builder
+        self.local_context_builder = LocalSearchMixedContext(
+            entities=self.entities,
+            entity_text_embeddings=self.vector_store,
+            text_embedder=self.embeddings,
+            text_units=self.text_units,
+            community_reports=self.community_reports,
+            relationships=self.relationships,
+        )
+        
+        # Global context builder
+        self.global_context_builder = GlobalCommunityContext(
+            community_reports=self.community_reports,
+            communities=self.communities,
+            entities=list(self.entities.values()),
+        )
+    
+    def _initialize_search_engines(self):
+        """Initialize search engines."""
+        self.local_search = LocalSearch(
+            model=self.llm,
+            context_builder=self.local_context_builder,
+            response_type="multiple paragraphs",
+        )
+        
+        self.global_search = GlobalSearch(
+            model=self.llm,
+            context_builder=self.global_context_builder,
+            response_type="multiple paragraphs",
+        )
+    
+    async def local_search_query(self, query: str, **kwargs) -> Dict[str, Any]:
+        """Perform local search query."""
+        result = await self.local_search.search(query, **kwargs)
+        
+        return {
+            'final_answer': result.response,
+            'retrieval_details': [
+                {
+                    'content': _normalize_context_text(result.context_text),
+                    'metadata': result.context_data,
+                    'method': 'advanced_local',
+                    'completion_time': result.completion_time,
+                    'llm_calls': result.llm_calls,
+                    'tokens_used': result.prompt_tokens + result.output_tokens
+                }
+            ],
+            'method': 'advanced_local',
+            'performance_metrics': {
+                'completion_time': result.completion_time,
+                'llm_calls': result.llm_calls,
+                'prompt_tokens': result.prompt_tokens,
+                'output_tokens': result.output_tokens,
+                'total_tokens': result.prompt_tokens + result.output_tokens
+            }
+        }
+    
+    async def global_search_query(self, query: str, **kwargs) -> Dict[str, Any]:
+        """Perform global search query."""
+        result = await self.global_search.search(query, **kwargs)
+        
+        return {
+            'final_answer': result.response,
+            'retrieval_details': [
+                {
+                    'content': _normalize_context_text(result.context_text),
+                    'metadata': result.context_data,
+                    'method': 'advanced_global',
+                    'completion_time': result.completion_time,
+                    'llm_calls': result.llm_calls,
+                    'tokens_used': result.prompt_tokens + result.output_tokens
+                }
+            ],
+            'method': 'advanced_global',
+            'performance_metrics': {
+                'completion_time': result.completion_time,
+                'llm_calls': result.llm_calls,
+                'prompt_tokens': result.prompt_tokens,
+                'output_tokens': result.output_tokens,
+                'total_tokens': result.prompt_tokens + result.output_tokens,
+                'map_responses': len(result.map_responses) if hasattr(result, 'map_responses') else 0
+            }
+        }
+    
+    def close(self):
+        """Close the Neo4j driver."""
+        if hasattr(self, 'driver'):
+            self.driver.close()
+
+
 # Main integration functions for benchmark compatibility
 async def query_advanced_graphrag_local(query: str, k: int = 10, **kwargs) -> Dict[str, Any]:
     """
@@ -1833,10 +2132,10 @@ async def query_advanced_graphrag_local(query: str, k: int = 10, **kwargs) -> Di
         Dictionary with response and retrieval details
     """
     
-    processor = AdvancedGraphProcessor()
-    
+    # Use lightweight connection for benchmarking - no processor initialization
     try:
-        retriever = AdvancedGraphRAGRetriever(processor)
+        # Create a minimal retriever without processor initialization overhead
+        retriever = LightweightAdvancedGraphRAGRetriever()
         
         # Perform local search
         result = await retriever.local_search_query(
@@ -1864,7 +2163,8 @@ async def query_advanced_graphrag_local(query: str, k: int = 10, **kwargs) -> Di
             }
         }
     finally:
-        processor.close()
+        if 'retriever' in locals():
+            retriever.close()
 
 
 async def query_advanced_graphrag_global(query: str, k: int = 8, **kwargs) -> Dict[str, Any]:
@@ -1880,10 +2180,10 @@ async def query_advanced_graphrag_global(query: str, k: int = 8, **kwargs) -> Di
         Dictionary with response and retrieval details
     """
     
-    processor = AdvancedGraphProcessor()
-    
+    # Use lightweight connection for benchmarking - no processor initialization
     try:
-        retriever = AdvancedGraphRAGRetriever(processor)
+        # Create a minimal retriever without processor initialization overhead
+        retriever = LightweightAdvancedGraphRAGRetriever()
         
         # Perform global search
         result = await retriever.global_search_query(query, **kwargs)
@@ -1907,7 +2207,8 @@ async def query_advanced_graphrag_global(query: str, k: int = 8, **kwargs) -> Di
             }
         }
     finally:
-        processor.close()
+        if 'retriever' in locals():
+            retriever.close()
 
 
 # Test function
@@ -1967,10 +2268,9 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
         return await query_advanced_graphrag_global(query, k=k, **kwargs)
     elif mode == "hybrid":
         # For hybrid mode, run both local and global and combine
-        processor = AdvancedGraphProcessor()
-        
         try:
-            retriever = AdvancedGraphRAGRetriever(processor)
+            # Create a minimal retriever without processor initialization overhead
+            retriever = LightweightAdvancedGraphRAGRetriever()
             
             # Run both local and global searches
             local_result = await retriever.local_search_query(query, top_k_mapped_entities=k, **kwargs)
@@ -2015,7 +2315,8 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
                 }
             }
         finally:
-            processor.close()
+            if 'retriever' in locals():
+                retriever.close()
     else:
         raise ValueError(f"Unknown mode: {mode}. Must be 'local', 'global', or 'hybrid'")
 

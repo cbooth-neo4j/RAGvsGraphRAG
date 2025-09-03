@@ -1,17 +1,32 @@
 """
-Custom Graph Processor for RFP Analysis
+Dynamic Graph Processor
 
 This script processes RFP documents by:
-1. Manually chunking text
-2. Creating embeddings with OpenAI
-3. Extracting entities with spaCy
-4. Building a proper graph schema in Neo4j
-5. Performing entity resolution to merge similar entities
+1. Corpus-wide entity discovery using LLM analysis with caching
+2. PDF text extraction with table extraction (Camelot/Tabula)
+3. Intelligent text chunking with RecursiveCharacterTextSplitter
+4. Creating embeddings with OpenAI (text-embedding-3-small)
+5. Dynamic entity extraction using LLM with discovered entity types
+6. Building a unified graph schema in Neo4j with vector indexes
+7. Advanced entity resolution using Graph Data Science algorithms
+8. Creating semantic relationships between entities and chunks
 """
 
 import os
 import json
+import hashlib
+import re
 from pypdf import PdfReader
+try:
+    import camelot  # type: ignore
+    _HAS_CAMELOT = True
+except Exception:
+    _HAS_CAMELOT = False
+try:
+    import tabula  # type: ignore
+    _HAS_TABULA = True
+except Exception:
+    _HAS_TABULA = False
 from pathlib import Path
 from typing import List, Dict, Tuple, Any, Optional
 from dotenv import load_dotenv
@@ -28,11 +43,14 @@ from tqdm import tqdm
 # Load environment variables
 load_dotenv()
 
+# Import centralized configuration
+from config import get_model_config, get_embeddings, get_llm, ModelProvider
+
 # Configuration
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
-LLM = os.environ.get('OPENAI_MODEL_NAME', 'gpt-4o-mini')  # Default to gpt-4o-mini if not set
+LLM = os.environ.get('OPENAI_MODEL_NAME', os.environ.get('LLM_FALLBACK_MODEL', 'qwen3:8b'))  # Use configurable fallback
 
 class DuplicateEntities(BaseModel):
     entities: List[str] = Field(
@@ -45,11 +63,20 @@ class Disambiguate(BaseModel):
     )
 
 class CustomGraphProcessor:
-    def __init__(self):
+    def __init__(self, model_config=None):
+        self.config = model_config or get_model_config()
         self.driver = neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        # IMPORTANT: Match vector index dimensions (1536). Use text-embedding-3-small.
-        self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-        self.llm = ChatOpenAI(model=LLM, temperature=0)
+        
+        # Initialize models based on configuration
+        self.embeddings = get_embeddings()
+        self.llm = get_llm()
+        
+        # Validate embedding dimensions for Neo4j vector indexes
+        expected_dims = self.config.embedding_dimensions
+        if expected_dims != 1536 and self.config.embedding_provider == ModelProvider.OPENAI:
+            import warnings
+            warnings.warn(f"Neo4j vector indexes expect 1536 dimensions, but {self.config.embedding_model.value} has {expected_dims} dimensions. You may need to recreate indexes.")
+        
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=50,
@@ -57,9 +84,14 @@ class CustomGraphProcessor:
             separators=["\n\n", "\n", " ", ""]
         )
         
+        # Always use dynamic entity discovery with corpus-wide approach
+        self.corpus_discovery = True
+        self.discovered_labels: Optional[List[str]] = None
+        self.schema_cache_file = "data_processors/.schema_cache.json"
+        
         # Entity resolution components
         self.gds = GraphDataScience(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        self.extraction_llm = ChatOpenAI(model_name=LLM).with_structured_output(Disambiguate)
+        self.extraction_llm = get_llm().with_structured_output(Disambiguate)
         
         # Entity resolution prompt
         system_prompt = """You are a data processing assistant. Your task is to identify duplicate entities in a list and decide which of them should be merged.
@@ -85,6 +117,295 @@ Please identify duplicates, merge them, and provide the merged list.
         
         self.extraction_chain = self.extraction_prompt | self.extraction_llm
         
+    # ---------------------- Corpus-wide discovery utilities ----------------------
+    def _compute_corpus_hash(self, pdf_files: List[Path]) -> str:
+        """Compute hash of corpus for schema cache key."""
+        file_info = []
+        for pdf_path in sorted(pdf_files):
+            try:
+                stat = pdf_path.stat()
+                file_info.append(f"{pdf_path.name}:{stat.st_size}:{stat.st_mtime}")
+            except Exception:
+                file_info.append(f"{pdf_path.name}:unknown")
+        corpus_str = "|".join(file_info)
+        return hashlib.md5(corpus_str.encode()).hexdigest()[:12]
+
+    def _load_schema_cache(self, corpus_hash: str) -> Optional[List[str]]:
+        """Load cached schema labels if available."""
+        try:
+            if os.path.exists(self.schema_cache_file):
+                with open(self.schema_cache_file, 'r') as f:
+                    cache = json.load(f)
+                    if cache.get('corpus_hash') == corpus_hash:
+                        return cache.get('labels', [])
+        except Exception:
+            pass
+        return None
+
+    def _save_schema_cache(self, corpus_hash: str, labels: List[str]):
+        """Save approved labels to cache."""
+        try:
+            cache = {
+                'corpus_hash': corpus_hash,
+                'labels': labels,
+                'created_at': str(os.path.getctime(self.schema_cache_file) if os.path.exists(self.schema_cache_file) else 'new')
+            }
+            with open(self.schema_cache_file, 'w') as f:
+                json.dump(cache, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not save schema cache: {e}")
+
+    def _extract_entity_rich_patterns(self, text: str) -> str:
+        """Extract entity-rich patterns: ALL CAPS, quoted text, bullet points."""
+        patterns = []
+        # ALL CAPS words (likely entities)
+        caps_matches = re.findall(r'\b[A-Z]{2,}(?:\s+[A-Z]{2,})*\b', text)
+        patterns.extend(caps_matches[:10])  # Limit to avoid noise
+        
+        # Quoted text (often entity names)
+        quoted_matches = re.findall(r'"([^"]{2,50})"', text)
+        patterns.extend(quoted_matches[:5])
+        
+        # Bullet points and list items (often entity lists)
+        bullet_matches = re.findall(r'(?:^|\n)\s*[•\-\*]\s*([^\n]{5,100})', text, re.MULTILINE)
+        patterns.extend(bullet_matches[:8])
+        
+        return " | ".join(patterns)
+
+    def _sample_corpus_text(self, pdf_files: List[Path]) -> str:
+        """Hybrid sampling: first/last 500 chars + patterns + stratified sampling."""
+        samples = []
+        total_chars = 0
+        max_chars = 8000  # Token budget
+        
+        for pdf_path in pdf_files[:20]:  # Limit to first 20 files for performance
+            try:
+                # Extract basic text
+                text = self.extract_text_from_pdf(str(pdf_path))
+                if not text.strip():
+                    continue
+                
+                # Document title/filename
+                doc_title = f"Document: {pdf_path.stem}"
+                samples.append(doc_title)
+                total_chars += len(doc_title)
+                
+                # First 500 + last 500 chars (intro/conclusion entity density)
+                first_part = text[:500].strip()
+                last_part = text[-500:].strip() if len(text) > 1000 else ""
+                
+                if first_part:
+                    samples.append(f"Beginning: {first_part}")
+                    total_chars += len(first_part) + 12
+                
+                if last_part and last_part != first_part:
+                    samples.append(f"End: {last_part}")
+                    total_chars += len(last_part) + 5
+                
+                # Entity-rich patterns
+                patterns = self._extract_entity_rich_patterns(text)
+                if patterns:
+                    samples.append(f"Patterns: {patterns}")
+                    total_chars += len(patterns) + 11
+                
+                # Stop if we hit budget
+                if total_chars >= max_chars:
+                    break
+                    
+            except Exception as e:
+                print(f"Warning: Could not sample from {pdf_path}: {e}")
+                continue
+        
+        return "\n\n".join(samples)[:max_chars]
+
+    def discover_corpus_labels(self, pdf_files: List[Path]) -> List[str]:
+        """Discover labels corpus-wide using hybrid sampling strategy."""
+        corpus_hash = self._compute_corpus_hash(pdf_files)
+        
+        # Check cache first
+        cached_labels = self._load_schema_cache(corpus_hash)
+        if cached_labels:
+            print(f"📋 Using cached labels from previous run: {cached_labels}")
+            return cached_labels
+        
+        # Sample corpus text
+        print("🔍 Sampling corpus text for entity discovery...")
+        corpus_sample = self._sample_corpus_text(pdf_files)
+        
+        if not corpus_sample.strip():
+            print("⚠️ No text could be sampled from corpus")
+            return []
+        
+        # Discover labels
+        print("🧠 Analyzing corpus with LLM...")
+        proposed_labels = self.discover_labels_for_text(corpus_sample)
+        
+        # CLI approval
+        approved_labels = self._approve_labels_cli(proposed_labels)
+        
+        # Cache results
+        if approved_labels:
+            self._save_schema_cache(corpus_hash, approved_labels)
+        
+        return approved_labels
+
+    def discover_labels_for_text(self, text: str, max_labels: int = 12) -> List[str]:
+        """Discover entity labels from text using LLM."""
+        # Truncate text to fit in prompt
+        text_sample = text[:12000]
+        
+        prompt = f"""
+        Analyze the following text and propose up to {max_labels} entity types (labels) that would be most useful for knowledge graph construction.
+
+        Focus on:
+        - Domain-specific entities relevant to this content
+        - Entities that appear frequently and have relationships
+        - Concrete, actionable entity types (not abstract concepts)
+        
+        Examples of good entity types: Contract, Vendor, Deliverable, Timeline, Budget, Compliance, Product, Service, Location, Person, Organization, Requirement, Technology, Process
+
+        Text to analyze:
+        {text_sample}
+        
+        Return ONLY a comma-separated list of entity type names (no descriptions, no extra text):
+        """
+        
+        response = self.llm.invoke(prompt)
+        response_text = response.content.strip()
+        
+        # Parse the response
+        labels = [label.strip() for label in response_text.split(',') if label.strip()]
+        
+        # Clean and validate labels
+        clean_labels = []
+        for label in labels[:max_labels]:
+            # Sanitize label name - replace spaces with underscores, remove special chars
+            clean_label = re.sub(r'[^a-zA-Z0-9_]', '', label.replace(' ', '_').replace('-', '_'))
+            if clean_label and len(clean_label) > 1:
+                # Ensure it starts with a letter (Neo4j requirement)
+                if not clean_label[0].isalpha():
+                    clean_label = 'Entity_' + clean_label
+                clean_labels.append(clean_label.title())
+        
+        return clean_labels
+
+    def _approve_labels_cli(self, proposed_labels: List[str]) -> List[str]:
+        """CLI interface for user to approve/modify discovered labels."""
+        if not proposed_labels:
+            print("⚠️ No labels were discovered")
+            return []
+        
+        print(f"\n📋 Proposed entity types: {', '.join(proposed_labels)}")
+        
+        while True:
+            choice = input("\n✅ Approve these entities? (y/n/edit): ").lower().strip()
+            
+            if choice in ['y', 'yes']:
+                return proposed_labels
+            elif choice in ['n', 'no']:
+                print("❌ Labels rejected. Using fallback to CONSTRAINED mode.")
+                return []
+            elif choice in ['e', 'edit']:
+                print("📝 Enter your preferred entity types (comma-separated):")
+                user_input = input("> ").strip()
+                if user_input:
+                    user_labels = [label.strip().title() for label in user_input.split(',') if label.strip()]
+                    if user_labels:
+                        return user_labels
+                print("⚠️ No valid labels entered, trying again...")
+            else:
+                print("⚠️ Please enter 'y', 'n', or 'edit'")
+
+    def extract_entities_dynamic(self, text: str, allowed_labels: Optional[List[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """Extract entities dynamically using discovered or free labels."""
+        if allowed_labels:
+            labels_constraint = f"ONLY extract entities of these types: {', '.join(allowed_labels)}"
+        else:
+            labels_constraint = "Extract any relevant entities you find"
+        
+        prompt = f"""
+        Extract entities from the following text. {labels_constraint}
+        
+        Return ONLY a valid JSON object with this structure:
+        {{
+            "entities": [
+                {{"type": "EntityType", "name": "entity name", "description": "brief description"}}
+            ]
+        }}
+        
+        Guidelines:
+        - Keep entity names concise and specific
+        - Provide brief, relevant descriptions
+        - Focus on entities that have clear relationships to other entities
+        
+        Text to analyze:
+        {text[:3000]}
+        
+        Return only the JSON object, no other text.
+        """
+        
+        response = self.llm.invoke(prompt)
+        response_text = response.content.strip()
+        
+        # Clean response
+        if response_text.startswith('```json'):
+            response_text = response_text[7:-3]
+        elif response_text.startswith('```'):
+            response_text = response_text[3:-3]
+        
+        try:
+            result = json.loads(response_text)
+            entities = result.get('entities', [])
+            
+            # Group by type for compatibility with existing code
+            grouped = {}
+            for entity in entities:
+                entity_type = entity.get('type', 'Unknown')
+                # Sanitize entity type same as labels
+                entity_type = re.sub(r'[^a-zA-Z0-9_]', '', entity_type.replace(' ', '_').replace('-', '_'))
+                if entity_type and not entity_type[0].isalpha():
+                    entity_type = 'Entity_' + entity_type
+                entity_type = entity_type.title()
+                
+                if entity_type not in grouped:
+                    grouped[entity_type] = []
+                
+                grouped[entity_type].append({
+                    'text': entity.get('name', ''),
+                    'description': entity.get('description', ''),
+                    'label': entity_type.upper(),
+                    'start': 0,
+                    'end': len(entity.get('name', ''))
+                })
+            
+            print(f"✅ Extracted {sum(len(v) for v in grouped.values())} dynamic entities")
+            return grouped
+            
+        except json.JSONDecodeError as e:
+            print(f"JSON parsing error in dynamic extraction: {e}")
+            return {}
+
+    def create_entity_relationships_dynamic(self, session, entity_ids: List[Tuple[str, str]]):
+        """Create generic RELATES_TO relationships for dynamic entities."""
+        if len(entity_ids) < 2:
+            return
+        
+        # Create relationships between all entities in the chunk (co-occurrence)
+        for i, (label1, name1) in enumerate(entity_ids):
+            for j, (label2, name2) in enumerate(entity_ids[i+1:], i+1):
+                if label1 == label2 and name1 == name2:
+                    continue
+                
+                # Create bidirectional relationships with co-occurrence count
+                unique_id1 = f"{label1}_{name1}"
+                unique_id2 = f"{label2}_{name2}"
+                session.run("""
+                    MATCH (e1:__Entity__ {id: $id1}), (e2:__Entity__ {id: $id2})
+                    MERGE (e1)-[r:RELATES_TO]->(e2)
+                    ON CREATE SET r.co_occurrences = 1
+                    ON MATCH SET r.co_occurrences = r.co_occurrences + 1
+                """, id1=unique_id1, id2=unique_id2)
+        
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         """Extract text from PDF file"""
         if not os.path.exists(pdf_path):
@@ -99,6 +420,57 @@ Please identify duplicates, merge them, and provide the merged list.
             raise ValueError(f"No text content extracted from PDF: {pdf_path}")
             
         return text
+
+    def extract_tables(self, pdf_path: str, source_file: str, start_index: int) -> List[Dict[str, Any]]:
+        """Extract tables using Camelot, falling back to Tabula, else return empty list.
+
+        Tables are converted to CSV text and emitted as atomic 'table' chunks.
+        """
+        chunks: List[Dict[str, Any]] = []
+        table_count = 0
+        # Try Camelot first
+        if _HAS_CAMELOT:
+            try:
+                # Prefer lattice for ruled tables, fallback to stream
+                tables = camelot.read_pdf(pdf_path, pages='all', flavor='lattice')
+                if tables.n == 0:
+                    tables = camelot.read_pdf(pdf_path, pages='all', flavor='stream')
+                for idx in range(tables.n):
+                    try:
+                        df = tables[idx].df
+                        csv_text = df.to_csv(index=False)
+                        chunks.append({
+                            'text': csv_text[:20000],
+                            'index': start_index + table_count,
+                            'source': source_file,
+                            'type': 'table'
+                        })
+                        table_count += 1
+                    except Exception:
+                        continue
+                return chunks
+            except Exception:
+                pass
+        # Fallback to Tabula
+        if _HAS_TABULA:
+            try:
+                dfs = tabula.read_pdf(pdf_path, pages='all', multiple_tables=True)
+                for df in dfs or []:
+                    try:
+                        csv_text = df.to_csv(index=False)
+                        chunks.append({
+                            'text': csv_text[:20000],
+                            'index': start_index + table_count,
+                            'source': source_file,
+                            'type': 'table'
+                        })
+                        table_count += 1
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        # If neither available or no tables detected, return empty -> default to text chunking only
+        return chunks
     
     def chunk_text(self, text: str, source_file: str) -> List[Dict[str, Any]]:
         """Split text into chunks using RecursiveCharacterTextSplitter"""
@@ -129,89 +501,7 @@ Please identify duplicates, merge them, and provide the merged list.
             print(f"Error creating embedding: {e}")
             return []
     
-    def extract_entities(self, text: str) -> Dict[str, List[Dict[str, Any]]]:
-        """Extract entities using GPT-4o-mini for intelligent entity extraction from RFP documents"""
-        
-        # Initialize entities structure
-        entities = {
-            'organizations': [],
-            'locations': [],
-            'dates': [],
-            'persons': [],
-            'financial': [],
-            'requirements': []
-        }
-        
-        # Create prompt for GPT-4o-mini
-        prompt = f"""
-        Extract entities from the following RFP document text. Return ONLY a valid JSON object with the following structure:
-        
-        {{
-            "organizations": [{{"text": "org name", "description": "brief description of the organization", "label": "ORG"}}],
-            "locations": [{{"text": "location name", "description": "brief description of the location", "label": "GPE"}}],
-            "dates": [{{"text": "date/time", "description": "context of the date", "label": "DATE"}}],
-            "persons": [{{"text": "person name", "description": "role or title of the person", "label": "PERSON"}}],
-            "financial": [{{"text": "financial amount/term", "description": "context of the financial term", "label": "MONEY"}}],
-            "requirements": [{{"text": "specific requirement", "description": "brief description of the requirement", "label": "REQUIREMENT"}}]
-        }}
-        
-        Guidelines:
-        - Organizations: Company names, institutions, government agencies with their role/purpose
-        - Locations: Cities, states, countries, addresses with context
-        - Dates: Specific dates, timeframes, deadlines with their significance
-        - Persons: Individual names, titles, contact persons with their role
-        - Financial: Dollar amounts, percentages, financial terms with context
-        - Requirements: Specific service requirements, capabilities needed, scope items (keep concise, max 50 chars each) with brief description
-        
-        Text to analyze:
-        {text[:3000]}  # Limit to first 3000 chars to avoid token limits
-        
-        Return only the JSON object, no other text.
-        """
-        
-        # Get response from GPT-4o-mini
-        response = self.llm.invoke(prompt)
-        response_text = response.content.strip()
-        
-        # Try to extract JSON from response
-        if response_text.startswith('```json'):
-            response_text = response_text[7:-3]  # Remove ```json and ```
-        elif response_text.startswith('```'):
-            response_text = response_text[3:-3]  # Remove ``` and ```
-        
-        # Clean up any extra text before/after JSON
-        response_text = response_text.strip()
-        
-        # Parse JSON response
-        try:
-            extracted_entities = json.loads(response_text)
-        except json.JSONDecodeError as json_error:
-            print(f"JSON parsing error: {json_error}")
-            print(f"Response text: {response_text[:200]}...")
-            raise
-        
-        # Validate and clean the extracted entities
-        for entity_type, entity_list in extracted_entities.items():
-            if entity_type in entities and isinstance(entity_list, list):
-                for entity in entity_list:
-                    if isinstance(entity, dict) and 'text' in entity:
-                        # Clean and validate entity text
-                        entity_text = entity['text'].strip()
-                        entity_description = entity.get('description', '').strip()
-                        
-                        if entity_text and len(entity_text) <= 200:  # Reasonable length limit
-                            entity_info = {
-                                'text': entity_text,
-                                'description': entity_description,
-                                'label': entity.get('label', entity_type.upper()),
-                                'start': 0,  # We don't have exact positions from GPT
-                                'end': len(entity_text)
-                            }
-                            entities[entity_type].append(entity_info)
-        
-        print(f"✅ Extracted {sum(len(entities[et]) for et in entities)} entities using GPT-4o-mini")
-        
-        return entities
+
     
     def setup_database_schema(self):
         """Create the Neo4j schema with proper indexes"""
@@ -219,14 +509,9 @@ Please identify duplicates, merge them, and provide the merged list.
         self.clear_database()
         
         with self.driver.session() as session:
-            # Create constraints for unique entities - including __Entity__ for resolution
+            # Create constraints for unique entities (dynamic approach)
             constraints = [
                 "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:__Entity__) REQUIRE e.id IS UNIQUE",
-                "CREATE CONSTRAINT org_name IF NOT EXISTS FOR (o:Organization) REQUIRE o.name IS UNIQUE",
-                "CREATE CONSTRAINT loc_name IF NOT EXISTS FOR (l:Location) REQUIRE l.name IS UNIQUE", 
-                "CREATE CONSTRAINT req_name IF NOT EXISTS FOR (r:Requirement) REQUIRE r.name IS UNIQUE",
-                "CREATE CONSTRAINT person_name IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS UNIQUE",
-                "CREATE CONSTRAINT financial_name IF NOT EXISTS FOR (f:Financial) REQUIRE f.name IS UNIQUE",
                 "CREATE CONSTRAINT doc_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE",
                 "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE"
             ]
@@ -240,26 +525,21 @@ Please identify duplicates, merge them, and provide the merged list.
             
             # Create full-text indexes first (required for Neo4j GraphRAG compatibility)
             fulltext_indexes = [
-                """
-                CREATE FULLTEXT INDEX entity_fulltext_idx IF NOT EXISTS
-                FOR (e:__Entity__) ON e.name, e.description
-                """,
-                """
-                CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS
-                FOR (c:Chunk) ON c.text
-                """
+                "CREATE FULLTEXT INDEX entity_fulltext_idx IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name, e.description]",
+                "CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text]"
             ]
             
             for index in fulltext_indexes:
                 try:
                     session.run(index)
-                    print("Created full-text index")
+                    index_name = index.split()[3]  # Extract index name for logging
+                    print(f"✅ Created/verified full-text index: {index_name}")
                 except Exception as e:
-                    print(f"Full-text index may already exist: {e}")
+                    print(f"⚠️ Full-text index creation issue: {e}")
+                    # Continue processing - index might already exist
             
-            # Create vector indexes for embeddings
-            vector_indexes = [
-                """
+            # Create unified vector index for all entities
+            entity_vector_index = """
                 CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
                 FOR (e:__Entity__) ON (e.embedding)
                 OPTIONS {
@@ -268,95 +548,13 @@ Please identify duplicates, merge them, and provide the merged list.
                         `vector.similarity_function`: 'cosine'
                     }
                 }
-                """,
-                """
-                CREATE VECTOR INDEX chunk_embedding IF NOT EXISTS
-                FOR (c:Chunk) ON (c.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """,
-                """
-                CREATE VECTOR INDEX document_embedding IF NOT EXISTS  
-                FOR (d:Document) ON (d.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """,
-                """
-                CREATE VECTOR INDEX organization_embedding IF NOT EXISTS
-                FOR (o:Organization) ON (o.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """,
-                """
-                CREATE VECTOR INDEX location_embedding IF NOT EXISTS
-                FOR (l:Location) ON (l.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """,
-                """
-                CREATE VECTOR INDEX date_embedding IF NOT EXISTS
-                FOR (dt:Date) ON (dt.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """,
-                """
-                CREATE VECTOR INDEX requirement_embedding IF NOT EXISTS
-                FOR (r:Requirement) ON (r.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """,
-                """
-                CREATE VECTOR INDEX person_embedding IF NOT EXISTS
-                FOR (p:Person) ON (p.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """,
-                """
-                CREATE VECTOR INDEX financial_embedding IF NOT EXISTS
-                FOR (f:Financial) ON (f.embedding)
-                OPTIONS {
-                    indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }
-                }
-                """
-            ]
+            """
             
-            for index in vector_indexes:
-                try:
-                    session.run(index)
-                    print("Created vector index")
-                except Exception as e:
-                    print(f"Vector index may already exist: {e}")
+            try:
+                session.run(entity_vector_index)
+                print("Created unified entity vector index")
+            except Exception as e:
+                print(f"Entity vector index may already exist: {e}")
     
     def clear_database(self):
         """Clear all data from the Neo4j database"""
@@ -373,12 +571,37 @@ Please identify duplicates, merge them, and provide the merged list.
         text = self.extract_text_from_pdf(pdf_path)
         print(f"Extracted {len(text)} characters")
         
+        return self._process_document_text(text, doc_name, pdf_path)
+    
+    def process_text_document(self, text: str, doc_name: str, source_info: str = None) -> Dict[str, Any]:
+        """Process a document from text content (for RAGBench, etc.)"""
+        print(f"Processing {doc_name}...")
+        print(f"Text length: {len(text)} characters")
+        
+        return self._process_document_text(text, doc_name, source_info or doc_name)
+    
+    def _process_document_text(self, text: str, doc_name: str, source_info: str) -> Dict[str, Any]:
+        """Internal method to process document text (shared by PDF and text processing)"""
+        
+        # Per-document discovery if needed (fallback if corpus-wide failed)
+        if not self.discovered_labels:
+            print("\n🔎 Discovering entity labels from document text...")
+            proposed_labels = self.discover_labels_for_text(text)
+            self.discovered_labels = self._approve_labels_cli(proposed_labels)
+            print(f"\n✅ Using labels: {self.discovered_labels}")
+        
         # Create document embedding
         doc_embedding = self.create_embedding(text[:8000])  # Limit for embedding
         
         # Chunk text
         chunks = self.chunk_text(text, doc_name)
-        print(f"Created {len(chunks)} chunks")
+        # Attempt table extraction and append as atomic chunks (only for PDFs)
+        table_chunks = []
+        if source_info.endswith('.pdf') and os.path.exists(source_info):
+            table_chunks = self.extract_tables(source_info, doc_name, start_index=len(chunks))
+        if table_chunks:
+            chunks.extend(table_chunks)
+        print(f"Created {len(chunks)} chunks (including {len(table_chunks)} table chunks)")
         
         # Process with Neo4j
         with self.driver.session() as session:
@@ -388,13 +611,13 @@ Please identify duplicates, merge them, and provide the merged list.
                 CREATE (d:Document {
                     id: $doc_id,
                     name: $doc_name,
-                    path: $pdf_path,
+                    path: $source_info,
                     text: $text,
                     embedding: $embedding,
                     chunk_count: $chunk_count,
                     created_at: datetime()
                 })
-            """, doc_id=doc_id, doc_name=doc_name, pdf_path=pdf_path, 
+            """, doc_id=doc_id, doc_name=doc_name, source_info=source_info, 
                 text=text[:1000], embedding=doc_embedding, chunk_count=len(chunks))
             
             chunk_ids = []
@@ -443,144 +666,46 @@ Please identify duplicates, merge them, and provide the merged list.
                         CREATE (prev)-[:NEXT_CHUNK]->(curr)
                     """, prev_chunk_id=prev_chunk_id, chunk_id=chunk_id)
                 
-                # Extract and process entities for this chunk
-                entities = self.extract_entities(chunk['text'])
-                
-                # Store entity IDs for creating RELATES_TO relationships
+                # Extract and process entities for this chunk (always dynamic)
+                dynamic_entities = self.extract_entities_dynamic(
+                    chunk['text'],
+                    allowed_labels=self.discovered_labels,
+                                )
+                # Process dynamic entities
                 chunk_entity_ids = []
-                
-                # Create entity nodes with embeddings and HAS_ENTITY relationships
-                # Add counter for human_readable_id
                 entity_counter = 0
                 
-                for org in entities['organizations']:
-                    entity_counter += 1
-                    org_name = org['text']
-                    org_description = org.get('description', '')
-                    # Create embedding from both name and description
-                    embedding_text = f"{org_name}: {org_description}" if org_description else org_name
-                    org_embedding = self.create_embedding(embedding_text)
-                    session.run("""
-                        MERGE (o:Organization:__Entity__ {name: $name})
-                        ON CREATE SET o.description = $description, o.embedding = $embedding,
-                                    o.id = $name, o.entity_type = 'Organization', o.human_readable_id = $human_id
-                        ON MATCH SET o.description = CASE WHEN o.description IS NULL THEN $description ELSE o.description END,
-                                   o.embedding = CASE WHEN o.embedding IS NULL THEN $embedding ELSE o.embedding END,
-                                   o.id = $name, o.entity_type = 'Organization',
-                                   o.human_readable_id = CASE WHEN o.human_readable_id IS NULL THEN $human_id ELSE o.human_readable_id END
-                        WITH o
-                        MERGE (c:Chunk {id: $chunk_id})
-                        MERGE (c)-[:HAS_ENTITY]->(o)
-                    """, name=org_name, description=org_description, embedding=org_embedding, chunk_id=chunk_id, human_id=entity_counter)
-                    chunk_entity_ids.append(('Organization', org_name))
+                for entity_type, entity_list in dynamic_entities.items():
+                    for entity in entity_list:
+                        entity_counter += 1
+                        entity_name = entity['text']
+                        entity_description = entity.get('description', '')
+                        
+                        # Create embedding
+                        embedding_text = f"{entity_name}: {entity_description}" if entity_description else entity_name
+                        entity_embedding = self.create_embedding(embedding_text)
+                        
+                        # Create dynamic entity with both specific label and __Entity__
+                        # Use a unique identifier combining name and type to avoid conflicts
+                        unique_id = f"{entity_type}_{entity_name}"
+                        session.run(f"""
+                            MERGE (e:__Entity__ {{id: $unique_id}})
+                            ON CREATE SET e.name = $name, e.description = $description, e.embedding = $embedding,
+                                        e.entity_type = $entity_type, e.human_readable_id = $human_id,
+                                        e:{entity_type}
+                            ON MATCH SET e.description = CASE WHEN e.description IS NULL THEN $description ELSE e.description END,
+                                       e.embedding = CASE WHEN e.embedding IS NULL THEN $embedding ELSE e.embedding END,
+                                       e.human_readable_id = CASE WHEN e.human_readable_id IS NULL THEN $human_id ELSE e.human_readable_id END
+                            WITH e
+                            MERGE (c:Chunk {{id: $chunk_id}})
+                            MERGE (c)-[:HAS_ENTITY]->(e)
+                        """, unique_id=unique_id, name=entity_name, description=entity_description, 
+                            embedding=entity_embedding, chunk_id=chunk_id, human_id=entity_counter, entity_type=entity_type)
+                        
+                        chunk_entity_ids.append((entity_type, entity_name))
                 
-                for loc in entities['locations']:
-                    entity_counter += 1
-                    loc_name = loc['text']
-                    loc_description = loc.get('description', '')
-                    # Create embedding from both name and description
-                    embedding_text = f"{loc_name}: {loc_description}" if loc_description else loc_name
-                    loc_embedding = self.create_embedding(embedding_text)
-                    session.run("""
-                        MERGE (l:Location:__Entity__ {name: $name})
-                        ON CREATE SET l.description = $description, l.embedding = $embedding,
-                                    l.id = $name, l.entity_type = 'Location', l.human_readable_id = $human_id
-                        ON MATCH SET l.description = CASE WHEN l.description IS NULL THEN $description ELSE l.description END,
-                                   l.embedding = CASE WHEN l.embedding IS NULL THEN $embedding ELSE l.embedding END,
-                                   l.id = $name, l.entity_type = 'Location',
-                                   l.human_readable_id = CASE WHEN l.human_readable_id IS NULL THEN $human_id ELSE l.human_readable_id END
-                        WITH l
-                        MERGE (c:Chunk {id: $chunk_id})
-                        MERGE (c)-[:HAS_ENTITY]->(l)
-                    """, name=loc_name, description=loc_description, embedding=loc_embedding, chunk_id=chunk_id, human_id=entity_counter)
-                    chunk_entity_ids.append(('Location', loc_name))
-                
-                for date in entities['dates']:
-                    entity_counter += 1
-                    date_name = date['text']
-                    date_description = date.get('description', '')
-                    # Create embedding from both name and description
-                    embedding_text = f"{date_name}: {date_description}" if date_description else date_name
-                    date_embedding = self.create_embedding(embedding_text)
-                    session.run("""
-                        MERGE (dt:Date:__Entity__ {name: $name})
-                        ON CREATE SET dt.description = $description, dt.embedding = $embedding,
-                                    dt.id = $name, dt.entity_type = 'Date', dt.human_readable_id = $human_id
-                        ON MATCH SET dt.description = CASE WHEN dt.description IS NULL THEN $description ELSE dt.description END,
-                                   dt.embedding = CASE WHEN dt.embedding IS NULL THEN $embedding ELSE dt.embedding END,
-                                   dt.id = $name, dt.entity_type = 'Date',
-                                   dt.human_readable_id = CASE WHEN dt.human_readable_id IS NULL THEN $human_id ELSE dt.human_readable_id END
-                        WITH dt
-                        MERGE (c:Chunk {id: $chunk_id})
-                        MERGE (c)-[:HAS_ENTITY]->(dt)
-                    """, name=date_name, description=date_description, embedding=date_embedding, chunk_id=chunk_id, human_id=entity_counter)
-                    chunk_entity_ids.append(('Date', date_name))
-                
-                for req in entities['requirements']:
-                    entity_counter += 1
-                    req_name = req['text']  # GPT-4o-mini already provides concise requirements
-                    req_description = req.get('description', '')
-                    # Create embedding from both name and description
-                    embedding_text = f"{req_name}: {req_description}" if req_description else req_name
-                    req_embedding = self.create_embedding(embedding_text)
-                    session.run("""
-                        MERGE (r:Requirement:__Entity__ {name: $name})
-                        ON CREATE SET r.description = $description, r.embedding = $embedding,
-                                    r.id = $name, r.entity_type = 'Requirement', r.human_readable_id = $human_id
-                        ON MATCH SET r.description = CASE WHEN r.description IS NULL THEN $description ELSE r.description END,
-                                   r.embedding = CASE WHEN r.embedding IS NULL THEN $embedding ELSE r.embedding END,
-                                   r.id = $name, r.entity_type = 'Requirement',
-                                   r.human_readable_id = CASE WHEN r.human_readable_id IS NULL THEN $human_id ELSE r.human_readable_id END
-                        WITH r
-                        MERGE (c:Chunk {id: $chunk_id})
-                        MERGE (c)-[:HAS_ENTITY]->(r)
-                    """, name=req_name, description=req_description, embedding=req_embedding, chunk_id=chunk_id, human_id=entity_counter)
-                    chunk_entity_ids.append(('Requirement', req_name))
-                
-                for person in entities['persons']:
-                    entity_counter += 1
-                    person_name = person['text']
-                    person_description = person.get('description', '')
-                    # Create embedding from both name and description
-                    embedding_text = f"{person_name}: {person_description}" if person_description else person_name
-                    person_embedding = self.create_embedding(embedding_text)
-                    session.run("""
-                        MERGE (p:Person:__Entity__ {name: $name})
-                        ON CREATE SET p.description = $description, p.embedding = $embedding,
-                                    p.id = $name, p.entity_type = 'Person', p.human_readable_id = $human_id
-                        ON MATCH SET p.description = CASE WHEN p.description IS NULL THEN $description ELSE p.description END,
-                                   p.embedding = CASE WHEN p.embedding IS NULL THEN $embedding ELSE p.embedding END,
-                                   p.id = $name, p.entity_type = 'Person',
-                                   p.human_readable_id = CASE WHEN p.human_readable_id IS NULL THEN $human_id ELSE p.human_readable_id END
-                        WITH p
-                        MERGE (c:Chunk {id: $chunk_id})
-                        MERGE (c)-[:HAS_ENTITY]->(p)
-                    """, name=person_name, description=person_description, embedding=person_embedding, chunk_id=chunk_id, human_id=entity_counter)
-                    chunk_entity_ids.append(('Person', person_name))
-                
-                for financial in entities['financial']:
-                    entity_counter += 1
-                    financial_name = financial['text']
-                    financial_description = financial.get('description', '')
-                    # Create embedding from both name and description
-                    embedding_text = f"{financial_name}: {financial_description}" if financial_description else financial_name
-                    financial_embedding = self.create_embedding(embedding_text)
-                    session.run("""
-                        MERGE (f:Financial:__Entity__ {name: $name})
-                        ON CREATE SET f.description = $description, f.embedding = $embedding,
-                                    f.id = $name, f.entity_type = 'Financial', f.human_readable_id = $human_id
-                        ON MATCH SET f.description = CASE WHEN f.description IS NULL THEN $description ELSE f.description END,
-                                   f.embedding = CASE WHEN f.embedding IS NULL THEN $embedding ELSE f.embedding END,
-                                   f.id = $name, f.entity_type = 'Financial',
-                                   f.human_readable_id = CASE WHEN f.human_readable_id IS NULL THEN $human_id ELSE f.human_readable_id END
-                        WITH f
-                        MERGE (c:Chunk {id: $chunk_id})
-                        MERGE (c)-[:HAS_ENTITY]->(f)
-                    """, name=financial_name, description=financial_description, embedding=financial_embedding, chunk_id=chunk_id, human_id=entity_counter)
-                    chunk_entity_ids.append(('Financial', financial_name))
-                
-                # Create RELATES_TO relationships between entities in the same chunk
-                self.create_entity_relationships(session, chunk_entity_ids)
+                # Create dynamic relationships
+                self.create_entity_relationships_dynamic(session, chunk_entity_ids)
         
         return {
             'document_id': doc_id,
@@ -594,6 +719,15 @@ Please identify duplicates, merge them, and provide the merged list.
         pdf_files = list(Path(pdf_dir).glob("*.pdf"))
         
         print(f"Found {len(pdf_files)} PDF files")
+        
+        # Corpus-wide discovery (always enabled)
+        if not self.discovered_labels:
+            print("\n🌐 Running corpus-wide entity discovery...")
+            self.discovered_labels = self.discover_corpus_labels(pdf_files)
+            if self.discovered_labels:
+                print(f"✅ Corpus-wide labels approved: {self.discovered_labels}")
+            else:
+                print("⚠️ No labels discovered, falling back to per-document discovery")
         
         # Setup database schema first
         self.setup_database_schema()
