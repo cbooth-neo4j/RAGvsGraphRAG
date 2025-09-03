@@ -59,7 +59,6 @@ class LLMFactory:
             # Use longer timeout for RAGAS evaluation context
             if 'RAGAS' in os.environ.get('EVALUATION_CONTEXT', ''):
                 timeout = base_timeout * 2  # Double timeout for RAGAS
-                print(f"   🔧 Using extended timeout for RAGAS: {timeout}s")
             else:
                 timeout = base_timeout
             

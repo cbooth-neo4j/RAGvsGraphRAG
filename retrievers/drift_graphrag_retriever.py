@@ -34,7 +34,7 @@ import numpy as np
 from dotenv import load_dotenv
 
 # Import our graph processor and advanced retriever
-from data_processors import AdvancedGraphProcessor
+from data_processors import CustomGraphProcessor as AdvancedGraphProcessor
 from .advanced_graphrag_retriever import GraphRAGLocalRetriever, SearchResult
 
 # Import new modular DRIFT components
@@ -726,7 +726,7 @@ async def query_drift_graphrag(query: str, use_modular: bool = True, **kwargs) -
     """
     
     # Initialize graph processor with error handling
-    from data_processors import AdvancedGraphProcessor
+    from data_processors import CustomGraphProcessor as AdvancedGraphProcessor
     try:
         processor = AdvancedGraphProcessor()
         print("✅ Neo4j connection successful")

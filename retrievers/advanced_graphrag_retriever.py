@@ -1336,7 +1336,7 @@ Each key point should be:
 - Supported by the community report data
 - Include a relevance score from 0-100 (100 being most relevant)
 
-Return your response as a JSON object with this structure:
+IMPORTANT: You MUST return your response as a valid JSON object with this exact structure:
 {{
     "points": [
         {{
@@ -1349,6 +1349,9 @@ Return your response as a JSON object with this structure:
         }}
     ]
 }}
+
+Do not include any text before or after the JSON. Only return valid JSON.
+If you have no relevant information, return: {{"points": []}}
 
 Community Report:
 {context_data}
@@ -1514,8 +1517,11 @@ class GlobalSearch:
             try:
                 # Parse search response json
                 processed_response = self._parse_search_response(search_response)
-            except ValueError:
-                logger.warning("Warning: Error parsing search response json - skipping this batch")
+                if not processed_response or processed_response == [{"answer": "", "score": 0}]:
+                    logger.warning("Warning: Empty or default response from parsing - may indicate LLM response issues")
+            except (ValueError, json.JSONDecodeError, Exception) as e:
+                logger.warning(f"Warning: Error parsing search response ({type(e).__name__}: {e}) - skipping this batch")
+                logger.debug(f"Problematic response: {search_response[:200]}...")
                 processed_response = []
             
             return SearchResult(
@@ -1528,8 +1534,16 @@ class GlobalSearch:
                 output_tokens=num_tokens(search_response, self.token_encoder),
             )
             
-        except Exception:
-            logger.exception("Exception in _map_response_single_batch")
+        except Exception as e:
+            logger.exception(f"Exception in _map_response_single_batch: {type(e).__name__}: {e}")
+            # Provide more detailed error information for debugging
+            if "timeout" in str(e).lower():
+                logger.error("Timeout error - consider increasing timeout settings or reducing batch size")
+            elif "connection" in str(e).lower():
+                logger.error("Connection error - check network connectivity and service availability")
+            elif "json" in str(e).lower():
+                logger.error("JSON parsing error - LLM may not be following expected response format")
+            
             return SearchResult(
                 response=[{"answer": "", "score": 0}],
                 context_data=context_data,
@@ -1543,34 +1557,117 @@ class GlobalSearch:
     def _parse_search_response(self, search_response: str) -> List[Dict[str, Any]]:
         """Parse the search response json and return a list of key points."""
         try:
-            # Clean up JSON response
+            # Clean up JSON response - handle multiple formats
+            original_response = search_response
+            
+            # Remove markdown code blocks
             if search_response.startswith('```json'):
-                search_response = search_response[7:-3]
+                search_response = search_response[7:]
+                if search_response.endswith('```'):
+                    search_response = search_response[:-3]
             elif search_response.startswith('```'):
-                search_response = search_response[3:-3]
+                search_response = search_response[3:]
+                if search_response.endswith('```'):
+                    search_response = search_response[:-3]
             
             search_response = search_response.strip()
             
-            parsed_json = json.loads(search_response)
+            # Handle empty or whitespace-only responses
+            if not search_response:
+                logger.warning("Empty search response received")
+                return [{"answer": "", "score": 0}]
+            
+            # Try to find JSON in the response if it contains other text
+            if '{' in search_response and '}' in search_response:
+                # Find the first opening brace and the matching closing brace
+                start_idx = search_response.find('{')
+                if start_idx != -1:
+                    # Count braces to find the matching closing brace
+                    brace_count = 0
+                    end_idx = -1
+                    for i, char in enumerate(search_response[start_idx:], start_idx):
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                end_idx = i
+                                break
+                    
+                    if end_idx != -1:
+                        search_response = search_response[start_idx:end_idx + 1]
+            
+            # Try parsing the JSON
+            try:
+                parsed_json = json.loads(search_response)
+            except json.JSONDecodeError as e:
+                # If JSON parsing fails, try to fix common issues
+                logger.warning(f"Initial JSON parse failed: {e}, attempting to fix...")
+                
+                # Try to fix common JSON issues
+                fixed_response = search_response
+                
+                # Remove any trailing commas
+                import re
+                fixed_response = re.sub(r',(\s*[}\]])', r'\1', fixed_response)
+                
+                # Try parsing again
+                try:
+                    parsed_json = json.loads(fixed_response)
+                    logger.info("Successfully parsed JSON after fixes")
+                except json.JSONDecodeError:
+                    # If still failing, log the problematic response and return default
+                    logger.error(f"Could not parse JSON response. Original: {original_response[:500]}...")
+                    return [{"answer": "", "score": 0}]
             
             if not isinstance(parsed_json, dict):
+                logger.warning(f"Parsed JSON is not a dict: {type(parsed_json)}")
                 return [{"answer": "", "score": 0}]
             
             parsed_elements = parsed_json.get("points")
-            if not parsed_elements or not isinstance(parsed_elements, list):
+            if not parsed_elements:
+                # Try alternative keys
+                for key in ["results", "items", "data", "responses"]:
+                    if key in parsed_json:
+                        parsed_elements = parsed_json[key]
+                        break
+                
+                if not parsed_elements:
+                    logger.warning("No 'points' or alternative keys found in parsed JSON")
+                    return [{"answer": "", "score": 0}]
+            
+            if not isinstance(parsed_elements, list):
+                logger.warning(f"Parsed elements is not a list: {type(parsed_elements)}")
                 return [{"answer": "", "score": 0}]
             
-            return [
-                {
-                    "answer": element["description"],
-                    "score": int(element["score"]),
-                }
-                for element in parsed_elements
-                if "description" in element and "score" in element
-            ]
+            results = []
+            for element in parsed_elements:
+                if isinstance(element, dict):
+                    # Handle various field names
+                    description = element.get("description") or element.get("answer") or element.get("text") or ""
+                    score = element.get("score", 0)
+                    
+                    # Convert score to int if possible
+                    try:
+                        score = int(float(score))
+                    except (ValueError, TypeError):
+                        score = 0
+                    
+                    if description:  # Only add if we have some content
+                        results.append({
+                            "answer": str(description),
+                            "score": score,
+                        })
             
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning(f"Error parsing search response: {e}")
+            if not results:
+                logger.warning("No valid elements found in parsed JSON")
+                return [{"answer": "", "score": 0}]
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Unexpected error parsing search response: {e}")
+            logger.error(f"Response content (first 500 chars): {search_response[:500]}...")
             return [{"answer": "", "score": 0}]
     
     async def _reduce_response(

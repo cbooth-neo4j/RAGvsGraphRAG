@@ -13,11 +13,11 @@ from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 import logging
 
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from .drift_state import ActionMetadata
+from config.model_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ Search Results:
 Please analyze and provide structured response.""")
         ])
         
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=self.config.temperature)
+        self.llm = get_llm(temperature=self.config.temperature)
         self.action_chain = self.action_prompt | self.llm.with_structured_output(ActionResult)
     
     def _generate_action_id(self) -> str:

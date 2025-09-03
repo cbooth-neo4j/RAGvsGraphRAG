@@ -11,10 +11,11 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 import logging
 
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from pydantic import BaseModel, Field
+
+from config.model_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +46,14 @@ class DRIFTPrimer:
         Initialize primer processor
         
         Args:
-            graph_processor: AdvancedGraphProcessor instance with Neo4j connection
+            graph_processor: CustomGraphProcessor instance with Neo4j connection
             config: Optional configuration for primer processing
         """
         self.graph = graph_processor
         self.driver = graph_processor.driver
         self.config = config or PrimerConfig()
         self.embeddings = graph_processor.embeddings
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=self.config.temperature)
+        self.llm = get_llm(temperature=self.config.temperature)
         
         # HyDE query expansion prompt
         self.hyde_prompt = ChatPromptTemplate.from_messages([

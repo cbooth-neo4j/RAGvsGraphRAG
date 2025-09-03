@@ -261,6 +261,8 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
     # Force sequential processing to prevent parallel job timeouts
     os.environ['RAGAS_MAX_WORKERS'] = '1'
     os.environ['RAGAS_DISABLE_PARALLEL'] = 'true'
+    os.environ['RAGAS_EXECUTOR_WORKERS'] = '1'
+    os.environ['RAGAS_ASYNC_MAX_WORKERS'] = '1'
     
     try:
         # Debug: Print first dataset item to check format
@@ -273,124 +275,137 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         # Monkey patch RAGAS timeout settings
         try:
             import ragas
-            # Set global timeout for RAGAS operations
+            # Set global timeout for RAGAS operations - increase default timeout
+            timeout_value = int(os.getenv('RAGAS_METRIC_TIMEOUT', '300'))  # Increased from 120 to 300
             if hasattr(ragas, '_timeout'):
-                ragas._timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '120'))
-        except:
-            pass
+                ragas._timeout = timeout_value
+            
+            # Set additional timeout configurations
+            os.environ['RAGAS_TIMEOUT'] = str(timeout_value)
+            os.environ['RAGAS_LLM_TIMEOUT'] = str(timeout_value)
+        except Exception as e:
+            print(f"   ⚠️  Could not set RAGAS timeout: {e}")
         
         # Prepare evaluator LLM with timeout configuration
         evaluator_llm = LangchainLLMWrapper(llm)
         
-        # Configure timeout for Ollama if needed
-        timeout_attrs = ['timeout', 'request_timeout', 'read_timeout']
-        timeout_found = False
-        for attr in timeout_attrs:
-            if hasattr(llm, attr):
-                timeout_val = getattr(llm, attr)
-                print(f"   ⏱️  Using LLM {attr}: {timeout_val}s")
-                timeout_found = True
-                break
+        # LLM timeout configuration is handled by the model factory
+        # If there are actual timeout issues, they will surface as runtime errors
         
-        if not timeout_found:
-            print("   ⚠️  No explicit timeout configured for LLM")
-            # Check environment variable as fallback
-            env_timeout = os.getenv('OLLAMA_REQUEST_TIMEOUT')
-            if env_timeout:
-                print(f"   📋 Environment timeout: {env_timeout}s")
-        
-        # Use basic metrics with timeout configuration
-        metric_timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '120'))  # 2 minutes per metric
-        
+        # Use basic metrics
         metrics = [
             LLMContextRecall(),
             Faithfulness(),
             FactualCorrectness()
         ]
         
-        # Configure timeout for each metric if supported
-        for metric in metrics:
-            if hasattr(metric, 'timeout'):
-                metric.timeout = metric_timeout
-            if hasattr(metric, 'llm') and hasattr(metric.llm, 'timeout'):
-                metric.llm.timeout = metric_timeout
-        
-        # Run evaluation with timeout settings and retry logic
-        max_retries = int(os.getenv('RAGAS_MAX_RETRIES', '2'))
+        # Run evaluation with retry logic
+        max_retries = int(os.getenv('RAGAS_MAX_RETRIES', '3'))  # Increased from 2 to 3
         for attempt in range(max_retries + 1):
             try:
                 print(f"   🔄 Evaluation attempt {attempt + 1}/{max_retries + 1}")
-                # Add timeout wrapper around evaluation
-                import signal
-                import functools
                 
-                def timeout_handler(signum, frame):
-                    raise TimeoutError("RAGAS evaluation timed out")
+                # Force sequential processing to avoid parallel job timeouts
+                import asyncio
+                try:
+                    # Close any existing event loop to prevent conflicts
+                    try:
+                        loop = asyncio.get_running_loop()
+                        if loop and not loop.is_closed():
+                            loop.close()
+                    except RuntimeError:
+                        pass  # No running loop
+                    
+                    # Set event loop policy for Windows compatibility
+                    if os.name == 'nt' and hasattr(asyncio, 'WindowsProactorEventLoopPolicy'):
+                        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+                    
+                    # Create new event loop
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    
+                except Exception as e:
+                    print(f"   ⚠️  Async setup warning: {e}")
+                    pass
                 
-                def run_with_timeout(func, timeout_seconds):
-                    if os.name == 'nt':  # Windows
-                        # On Windows, use threading timeout
-                        import threading
-                        result = [None]
-                        exception = [None]
+                # Set environment variables to force single-threaded execution
+                original_workers = os.environ.get('RAGAS_MAX_WORKERS')
+                original_executor = os.environ.get('RAGAS_EXECUTOR_WORKERS')
+                original_async = os.environ.get('RAGAS_ASYNC_MAX_WORKERS')
+                
+                os.environ['RAGAS_MAX_WORKERS'] = '1'
+                os.environ['RAGAS_EXECUTOR_WORKERS'] = '1'
+                os.environ['RAGAS_ASYNC_MAX_WORKERS'] = '1'
+                os.environ['RAGAS_DISABLE_PARALLEL'] = 'true'
+                
+                # Increase various timeout settings
+                os.environ['RAGAS_REQUEST_TIMEOUT'] = '600'  # 10 minutes
+                os.environ['RAGAS_ASYNC_TIMEOUT'] = '600'
+                os.environ['RAGAS_EVALUATION_TIMEOUT'] = '1200'  # 20 minutes for entire evaluation
+                
+                # Additional environment variables that might help
+                os.environ['HTTPX_TIMEOUT'] = '600'  # For HTTP client timeouts
+                os.environ['OPENAI_REQUEST_TIMEOUT'] = '600'  # For OpenAI API calls
+                os.environ['OLLAMA_REQUEST_TIMEOUT'] = '600'  # For Ollama API calls
+                
+                try:
+                    # Force sequential evaluation by evaluating one metric at a time
+                    print(f"   🔄 Evaluating metrics sequentially to avoid timeouts...")
+                    
+                    individual_results = {}
+                    
+                    for i, metric in enumerate(metrics):
+                        metric_name = type(metric).__name__
+                        print(f"   📊 Evaluating {metric_name} ({i+1}/{len(metrics)})...")
                         
-                        def target():
-                            try:
-                                result[0] = func()
-                            except Exception as e:
-                                exception[0] = e
-                        
-                        thread = threading.Thread(target=target)
-                        thread.daemon = True
-                        thread.start()
-                        thread.join(timeout_seconds)
-                        
-                        if thread.is_alive():
-                            raise TimeoutError("RAGAS evaluation timed out")
-                        if exception[0]:
-                            raise exception[0]
-                        return result[0]
-                    else:  # Unix
-                        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-                        signal.alarm(timeout_seconds)
                         try:
-                            return func()
-                        finally:
-                            signal.alarm(0)
-                            signal.signal(signal.SIGALRM, old_handler)
-                
-                def evaluation_func():
-                    # Force sequential processing to avoid parallel job timeouts
-                    import asyncio
-                    try:
-                        # Try to set event loop policy for better compatibility
-                        if hasattr(asyncio, 'WindowsProactorEventLoopPolicy'):
-                            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-                    except:
-                        pass
+                            # Evaluate single metric with longer timeout
+                            single_result = evaluate(
+                                dataset=evaluation_dataset,
+                                metrics=[metric],
+                                llm=evaluator_llm,
+                                raise_exceptions=False
+                            )
+                            
+                            # Extract the result for this metric
+                            if hasattr(single_result, 'to_pandas'):
+                                df = single_result.to_pandas()
+                                if not df.empty:
+                                    for col in df.columns:
+                                        if col.lower() not in ['user_input', 'retrieved_contexts', 'response', 'reference']:
+                                            individual_results[col] = df[col].mean()
+                                            print(f"     ✅ {metric_name}: {col} = {df[col].mean():.3f}")
+                            
+                        except Exception as metric_error:
+                            print(f"     ❌ {metric_name} failed: {metric_error}")
+                            # Set default value for failed metric
+                            individual_results[metric_name.lower()] = 0.0
                     
-                    # Set environment variable to force single-threaded execution
-                    original_workers = os.environ.get('RAGAS_MAX_WORKERS')
-                    os.environ['RAGAS_MAX_WORKERS'] = '1'
+                    # Create a mock result object with individual results
+                    class MockResult:
+                        def __init__(self, scores):
+                            self.scores = scores
+                        
+                        def to_pandas(self):
+                            import pandas as pd
+                            return pd.DataFrame([self.scores])
                     
-                    try:
-                        result = evaluate(
-                            dataset=evaluation_dataset,
-                            metrics=metrics,
-                            llm=evaluator_llm,
-                            raise_exceptions=False  # Don't fail entire evaluation on single errors
-                        )
-                        return result
-                    finally:
-                        # Restore original setting
-                        if original_workers is not None:
-                            os.environ['RAGAS_MAX_WORKERS'] = original_workers
-                        else:
-                            os.environ.pop('RAGAS_MAX_WORKERS', None)
-                
-                # Run with overall timeout (10 minutes)
-                overall_timeout = int(os.getenv('RAGAS_OVERALL_TIMEOUT', '600'))
-                result = run_with_timeout(evaluation_func, overall_timeout)
+                    result = MockResult(individual_results)
+                finally:
+                    # Restore original settings
+                    if original_workers is not None:
+                        os.environ['RAGAS_MAX_WORKERS'] = original_workers
+                    else:
+                        os.environ.pop('RAGAS_MAX_WORKERS', None)
+                    if original_executor is not None:
+                        os.environ['RAGAS_EXECUTOR_WORKERS'] = original_executor
+                    else:
+                        os.environ.pop('RAGAS_EXECUTOR_WORKERS', None)
+                    if original_async is not None:
+                        os.environ['RAGAS_ASYNC_MAX_WORKERS'] = original_async
+                    else:
+                        os.environ.pop('RAGAS_ASYNC_MAX_WORKERS', None)
+                    os.environ.pop('RAGAS_DISABLE_PARALLEL', None)
                 break  # Success, exit retry loop
             except Exception as e:
                 if "TimeoutError" in str(e) or "timeout" in str(e).lower():
@@ -403,7 +418,9 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                         
                         # Try with just one metric as fallback
                         try:
+                            print(f"   🔄 Attempting reduced metric evaluation (Faithfulness only)...")
                             reduced_metrics = [Faithfulness()]  # Most reliable metric
+                            
                             result = evaluate(
                                 dataset=evaluation_dataset,
                                 metrics=reduced_metrics,
@@ -417,6 +434,12 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                             raise e
                 else:
                     # Non-timeout error, don't retry
+                    print(f"   ❌ Evaluation failed: {e}")
+                    print(f"   💡 Suggestions:")
+                    print(f"      - Check if Ollama is running and accessible")
+                    print(f"      - Increase timeout: export OLLAMA_REQUEST_TIMEOUT=300")
+                    print(f"      - Reduce dataset size for testing")
+                    print(f"      - Try with OpenAI models instead")
                     raise e
         
         print(f"✅ {approach_name} evaluation completed")

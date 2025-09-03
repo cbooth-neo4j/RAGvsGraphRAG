@@ -65,9 +65,10 @@ class HybridCypherRAGRetriever:
         
         # Complete Local Entity HybridCypherRetriever query
         # This performs hybrid search on entities, then expands context via graph traversal
+        # Updated for Neo4j 5.23+ - using simplified approach without variable scope for parameters
         self.retrieval_query = """
-        // Hybrid search on entities (vector + fulltext)
-        CALL {
+        // Hybrid search on entities (vector + fulltext) using CALL subquery
+        CALL () {
             // Vector search on entity embeddings
             CALL db.index.vector.queryNodes($vector_index_name, $top_k, $query_vector) 
             YIELD node AS vector_node, score AS vector_score
@@ -89,51 +90,29 @@ class HybridCypherRAGRetriever:
              collect({id: elementId(node), score: score}) AS metadata
         
         // Graph expansion for Local Entity pattern
-        RETURN avg_score AS score, nodes, metadata,
-
-            // Find top co-mentioned chunks
-            collect {
-                UNWIND nodes AS n
-                MATCH (n)<-[:HAS_ENTITY]-(c:Chunk)
-                WITH c, count(distinct n) AS freq
-                RETURN c
-                ORDER BY freq DESC
-                LIMIT 3
-            } AS chunks,
-
-            // Find relevant communities
-            collect {
-                UNWIND nodes AS n
-                OPTIONAL MATCH (n)-[:IN_COMMUNITY]->(comm:__Community__)
-                WITH comm, 
-                     coalesce(comm.community_rank, 0) AS rank, 
-                     coalesce(comm.weight, 1.0) AS weight
-                WHERE comm IS NOT NULL
-                RETURN comm
-                ORDER BY rank DESC, weight DESC
-                LIMIT 3
-            } AS communities,
-
-            // Find relationships between found entities
-            collect {
-                UNWIND nodes AS n
-                UNWIND nodes AS m
-                MATCH (n)-[r]->(m)
-                WHERE n <> m
-                RETURN DISTINCT r
-            } AS rels,
-
-            // Find outside entities (1-hop neighbors not in initial results)
-            collect {
-                UNWIND nodes AS n
-                MATCH (n)-[r]-(outside_entity:__Entity__)
-                WHERE NOT outside_entity IN nodes
-                WITH outside_entity, collect(distinct r) AS rels, count(*) AS freq
-                ORDER BY freq DESC
-                LIMIT 10
-                WITH collect(outside_entity) AS outsideNodes, apoc.coll.flatten(collect(rels)) AS rels
-                RETURN { nodes: outsideNodes, rels: rels }
-            } AS outside
+        // Use a simpler approach that avoids the deprecated collect expressions
+        WITH nodes, avg_score, metadata,
+             // Get chunks connected to our entities
+             [n IN nodes | [(n)<-[:HAS_ENTITY]-(c:Chunk) | c]] AS chunk_lists,
+             // Get communities our entities belong to
+             [n IN nodes | [(n)-[:IN_COMMUNITY]->(comm:__Community__) | comm]] AS community_lists
+        
+        // Flatten and deduplicate the lists
+        WITH nodes, avg_score, metadata,
+             apoc.coll.flatten(chunk_lists)[0..3] AS chunks,
+             apoc.coll.flatten(community_lists)[0..3] AS communities
+        
+        // Get relationships between entities and outside entities
+        OPTIONAL MATCH (n)-[r]-(m) 
+        WHERE n IN nodes AND m IN nodes AND n <> m
+        WITH nodes, avg_score, metadata, chunks, communities, collect(DISTINCT r) AS rels
+        
+        OPTIONAL MATCH (n)-[r]-(outside_entity:__Entity__)
+        WHERE n IN nodes AND NOT outside_entity IN nodes
+        WITH nodes, avg_score, metadata, chunks, communities, rels,
+             collect(DISTINCT {entity: outside_entity, relationship: r})[0..10] AS outside
+        
+        RETURN avg_score AS score, nodes, metadata, chunks, communities, rels, outside
         """
 
     def _sanitize_fulltext_query(self, query: str) -> str:
