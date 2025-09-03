@@ -2,51 +2,74 @@
 
 ## 🎯 Project Overview
 
-A comprehensive evaluation framework comparing various RAG approaches using the RAGAS evaluation framework
+A comprehensive evaluation framework comparing various RAG approaches using the RAGAS evaluation framework with research-based enhancements.
 
-1. **ChromaDB RAG**: Traditional vector similarity search using embeddings
-2. **GraphRAG**: Basic Neo4j graph-enhanced vector search with entity resolution
-3. **Advanced GraphRAG**: Intelligent routing between global (community-based) and local (entity-enhanced) search modes
-4. **DRIFT GraphRAG**: Iterative refinement approach with action graphs and dynamic follow-ups
-5. **Text2Cypher RAG**: Natural language to Cypher query translation
-6. **Neo4j Vector RAG**: Pure vector similarity search using Neo4j vector index
+### **🔍 Retrieval Approaches**
+1. **ChromaDB RAG** - Traditional vector similarity search
+2. **GraphRAG** - Multi-hop graph traversal with entity resolution  
+3. **Advanced GraphRAG** - Community detection and element summarization
+4. **Text2Cypher** - Natural language to Cypher query translation
+5. **Neo4j Vector** - Graph database vector search
+6. **Hybrid Cypher** - Combined vector + graph traversal
+7. **DRIFT GraphRAG** - Dynamic reasoning with iterative fact-finding
 
-All approaches are evaluated using the RAGAS framework with automated professional visualizations and comprehensive performance metrics.
+### **🧠 Ontology & Entity Discovery**
+- **Research-based corpus sampling** with TF-IDF clustering and stratified selection
+- **Domain-aware entity extraction** (financial, medical, legal, technical, academic)
+- **Multi-strategy text sampling** for optimal entity type discovery
+- **Quality metrics** and performance analysis
 
-### Research Foundation
-- **GraphRAG Field Guide**: [Neo4j GraphRAG Patterns](https://neo4j.com/blog/developer/graphrag-field-guide-rag-patterns/)
-- **Microsoft GraphRAG**: [Global Community Summary Retrievers](https://graphrag.com/reference/graphrag/global-community-summary-retriever/)
+### **🧪 RAGBench Integration**
+- **Multiple dataset presets** from nano (10 docs) to full (60K docs)
+- **Domain-specific benchmarks** with rich metadata
+- **JSONL format** for flexible evaluation data
+- **Automated Q&A pair generation** for evaluation
+
+All approaches are evaluated using RAGAS framework with automated visualizations and comprehensive performance metrics.
+
+### **📚 Research Foundation**
+- **GraphRAG Patterns**: [Neo4j GraphRAG Field Guide](https://neo4j.com/blog/developer/graphrag-field-guide-rag-patterns/)
+- **Microsoft GraphRAG**: [Community Summary Retrievers](https://graphrag.com/reference/graphrag/global-community-summary-retriever/)
 - **DRIFT Algorithm**: [Microsoft DRIFT Research](https://www.microsoft.com/en-us/research/blog/introducing-drift-search-combining-global-and-local-search-methods-to-improve-quality-and-efficiency/)
-
-*Note: This repo provides a comprehensive starting framework. Performance outputs require customisation to your specific graph schema and input data for optimal results.*
+- **Entity Discovery**: 2025 research in ontology discovery and active learning
 
 ## 📁 Project Structure
 
 ```
 RAGvsGraphRAG/
 ├── 📂 data_processors/              # Document processing and graph construction
-│   ├── __init__.py                 # Module exports and factory functions
-│   ├── chroma_processor.py         # PDF text extraction and chunking for ChromaDB
-│   ├── graph_processor.py          # Basic graph processing + entity resolution
-│   └── advanced_graph_processor.py # Advanced features (inherits from basic)
+│   ├── process_data.py             # 🎯 Main CLI for data processing
+│   ├── build_graph/                # Graph processor
+│   │   ├── main_processor.py       # Main orchestrator class
+│   │   ├── entity_discovery.py     # Research-based entity discovery
+│   │   ├── text_processing.py      # PDF extraction, chunking, embeddings
+│   │   ├── graph_operations.py     # Neo4j operations & entity resolution
+│   │   └── README.md               # Technical deep-dive documentation
+│   ├── chroma_processor.py         # ChromaDB vector processing
+│   ├── graph_processor.py          # Legacy processor (use build_graph instead)
+│   └── advanced_graph_processor.py # Community detection and summarization
 ├── 📂 retrievers/                   # RAG retrieval implementations
-│   ├── __init__.py                 # Universal retriever interface
 │   ├── chroma_retriever.py         # ChromaDB vector similarity search
-│   ├── graph_rag_retriever.py      # Basic GraphRAG with entity traversal
-│   ├── advanced_graphrag_retriever.py # Global/local routing with communities
-│   ├── drift_graphrag_retriever.py # Microsoft DRIFT iterative refinement
-│   ├── text2cypher_retriever.py    # Natural language to Cypher translation
-│   └── neo4j_vector_retriever.py   # Pure Neo4j vector search
-├── 📂 benchmark/                    # Benchmark scripts and evaluation
-│   ├── ragas_benchmark.py          # Main RAGAS evaluation script (6-way comparison)
+│   ├── graph_rag_retriever.py      # Multi-hop graph traversal
+│   ├── advanced_graphrag_retriever.py # Community-enhanced GraphRAG
+│   ├── text2cypher_retriever.py    # Natural language to Cypher
+│   ├── neo4j_vector_retriever.py   # Neo4j vector search
+│   ├── hybrid_cypher_retriever.py  # Combined vector + graph
+│   ├── drift_graphrag_retriever.py # Dynamic reasoning approach
+│   └── README.md                   # Retriever usage guide
+├── 📂 benchmark/                    # Evaluation framework
+│   ├── ragas_benchmark.py          # 🎯 Main evaluation CLI
 │   ├── visualizations.py           # Automated chart generation
-│   ├── benchmark.csv               # Test questions and ground truth
-│   └── BENCHMARK_README.md         # Detailed benchmark documentation
+│   ├── benchmark.csv               # Default benchmark dataset
+│   ├── ragbench/                   # RAGBench dataset integration
+│   │   ├── simple_ingester.py      # Dataset processor
+│   │   ├── evaluator.py            # Q&A data preparation
+│   │   ├── results_formatter.py    # Human-readable reports
+│   │   ├── configs.py              # Preset configurations
+│   │   └── README.md               # RAGBench documentation
+│   └── README.md                   # Benchmarking guide
 ├── 📂 benchmark_outputs/           # Generated results and visualizations
 ├── 📂 tests/                       # Test and validation scripts
-│   ├── test_ragas_setup.py         # Quick 6-approach validation
-│   ├── check_chromaDB.py           # ChromaDB health check
-│   └── check_schema.py             # Neo4j schema inspection
 ├── 📂 PDFs/                        # Source documents for processing
 ├── 📂 chroma_db/                   # ChromaDB vector store data
 └── 📄 requirements.txt             # Python dependencies
@@ -67,88 +90,105 @@ OPENAI_API_KEY=your_openai_key
 OPENAI_MODEL_NAME=gpt-4o-mini  # Optional, defaults to gpt-4o-mini
 ```
 
-### 2. Process Documents
-
-#### Option A: ChromaDB Only (for traditional RAG)
+### 2. Start Neo4j Database
 ```bash
-# Process PDFs and create ChromaDB vector store
-python data_processors/chroma_processor.py
-
-# This creates:
-# - ChromaDB vector store in chroma_db/ directory
-# - Chunked text with metadata for similarity search
+# Using Docker (recommended)
+docker run --name neo4j-rag \
+    -p 7474:7474 -p 7687:7687 \
+    -e NEO4J_AUTH=neo4j/password \
+    neo4j:latest
 ```
 
-#### Option B: Basic Graph Processing (GraphRAG)
+### 3. Process Data (Choose One)
+
+#### **Option A: Process Your PDFs**
 ```bash
-# Process PDFs and create Neo4j graph with entity resolution
-python data_processors/graph_processor.py
+# Place PDFs in PDFs/ folder, then:
+python data_processors/process_data.py --pdfs
+```
+
+#### **Option B: Use RAGBench Dataset**
+```bash
+# Quick test with nano preset (10 documents)
+python data_processors/process_data.py --ragbench --preset nano
+
+# Or larger dataset with domain hint
+python data_processors/process_data.py --ragbench --preset micro --domain financial
+
+# See all available presets
+python data_processors/process_data.py --list-presets
 
 # This creates:
-# - Neo4j graph with entities and relationships  
-# - ChromaDB vector store for similarity search
+# - Neo4j graph with dynamically discovered entities and relationships
+# - ChromaDB vector store for similarity search  
 # - Entity resolution to merge duplicates using LLM evaluation
+# - Corpus-wide entity discovery with CLI approval and caching
 ```
 
-#### Option C: Advanced Graph Processing (Full Pipeline to enable advanced GraphRAG methods)
+### 4. Run Evaluation
 ```bash
-# Full advanced processing with all features enabled
-python data_processors/advanced_graph_processor.py
-
-# This takes what was done from graph_processor and:
-# - Enhances entity descriptions using batch LLM processing
-# - Adds hierarchical community structure with summaries
-# - Adds community detection using Leiden algorithm
-```
-
-> ⚠️ **Cost Warning**: Advanced processing includes LLM calls for entity enhancement and community summarization, which increases OpenAI API costs significantly.
-
-### 3. Validate Setup
-```bash
-# Quick health checks
-python tests/check_chromaDB.py
-python tests/check_schema.py
-
-# Test all six approaches with sample questions
-python tests/test_ragas_setup.py
-```
-
-### 4. Run Comprehensive Benchmark
-
-#### Six-Way Comparison (All Approaches)
-```bash
-# Complete evaluation with all six approaches
+# Compare all RAG approaches
 python benchmark/ragas_benchmark.py --all
+
+# Use RAGBench evaluation data (automatically created during processing)
+python benchmark/ragas_benchmark.py --all --jsonl benchmark/ragbench__nano_benchmark.jsonl
+
+# Selective testing
+python benchmark/ragas_benchmark.py --chroma --graphrag --text2cypher
 ```
 
-#### Selective Testing
-```bash
-# RAG vs GraphRAG
-python benchmark/ragas_benchmark.py --chroma --graphrag
+### 5. View Results
+- **Neo4j Browser**: http://localhost:7474 (explore the knowledge graph)
+- **Charts**: `benchmark_outputs/` folder (performance comparisons)
+- **Detailed Reports**: HTML reports with individual Q&A analysis
 
-# GraphRAG Comparison
-python benchmark/ragas_benchmark.py --graphrag --advanced-graphrag --drift-graphrag
+## 🎯 Key Features
 
-# Single Approach Testing
-python benchmark/ragas_benchmark.py --chroma               # ChromaDB only
-python benchmark/ragas_benchmark.py --graphrag             # GraphRAG only
-python benchmark/ragas_benchmark.py --advanced-graphrag    # Advanced GraphRAG only
-python benchmark/ragas_benchmark.py --hybrid-cypher #      # Hybrid cypher only
-python benchmark/ragas_benchmark.py --drift-graphrag       # DRIFT GraphRAG only
-python benchmark/ragas_benchmark.py --text2cypher          # Text2Cypher only
-python benchmark/ragas_benchmark.py --neo4j-vector         # Neo4j Vector only
+### **🧠 Research-Based Entity Discovery**
+- **Multi-strategy corpus sampling** with TF-IDF clustering and stratified selection
+- **Domain-aware entity extraction** with hints for financial, medical, legal, technical domains
+- **Quality metrics** including diversity scores and compression ratios
+- **Interactive CLI approval** for discovered entity types
 
-# Custom output directory
-python benchmark/ragas_benchmark.py --all --output-dir my_results
-```
+### **🧪 RAGBench Integration** 
+- **Multiple dataset presets** from nano (10 docs) to full (60K docs)
+- **Rich metadata** with domain, dataset, and record IDs
+- **JSONL format** for flexible evaluation data
+- **Automated Q&A generation** for comprehensive evaluation
 
-## 🔍 RAG Approaches Explained
+### **🔍 7 Retrieval Approaches**
+- **ChromaDB RAG** - Fast vector similarity search
+- **GraphRAG** - Multi-hop graph traversal with entity resolution
+- **Advanced GraphRAG** - Community detection and element summarization  
+- **Text2Cypher** - Natural language to database queries
+- **Neo4j Vector** - Graph database vector search
+- **Hybrid Cypher** - Combined vector + graph approach
+- **DRIFT GraphRAG** - Dynamic reasoning with iterative refinement
 
-### 1. ChromaDB RAG
-Traditional vector similarity search using OpenAI embeddings for fast document chunk retrieval.
+### **📊 Comprehensive Evaluation**
+- **RAGAS metrics** - Context Recall, Faithfulness, Factual Correctness
+- **Automated visualizations** - Performance charts and heatmaps
+- **Detailed reports** - HTML, CSV, and JSON outputs
+- **Human-readable analysis** - Individual Q&A breakdowns
+
+## 📚 Component Documentation
+
+- **[Data Processors](data_processors/README.md)** - Data processing and ingestion guide
+- **[Build Graph](data_processors/build_graph/README.md)** - Technical deep-dive on enhanced graph processing
+- **[Retrievers](retrievers/README.md)** - Retrieval approaches and usage patterns
+- **[Benchmark](benchmark/README.md)** - Evaluation framework and RAGAS integration
+- **[RAGBench](benchmark/ragbench/README.md)** - RAGBench dataset integration details
+
+## 🛠️ Requirements
+
+- **Python 3.8+**
+- **Neo4j Database** (Docker recommended)
+- **OpenAI API Key** (for embeddings and LLM processing)
+- **8GB+ RAM** (for larger datasets)
+- **Optional**: scikit-learn (for enhanced entity discovery)
 
 ### 2. GraphRAG  
-Neo4j graph-enhanced vector search with entity relationships and LLM-based entity resolution to merge duplicates.
+Neo4j graph-enhanced vector search with **dynamic entity discovery**. Automatically discovers entity types from your documents with CLI approval. Includes LLM-based entity resolution to merge duplicates.
 
 ### 3. Advanced GraphRAG 
 Intelligent routing between global community search and local entity search with element summarization and community detection.
@@ -182,6 +222,37 @@ How factually accurate the response is compared to ground truth reference answer
 The **Average Score** for each approach is calculated as:
 ```
 Average Score = (Context Recall + Faithfulness + Factual Correctness) / 3
+```
+
+## 🧠 Dynamic Entity Discovery
+
+The graph processor now features **intelligent entity discovery** that adapts to your document content:
+
+### How It Works
+1. **Corpus Analysis**: Analyzes your entire document collection using hybrid sampling (first/last 500 chars + entity-rich patterns)
+2. **LLM Proposal**: GPT-4 proposes relevant entity types based on document content
+3. **CLI Approval**: You review and approve/modify the proposed entities
+4. **Schema Caching**: Approved entities are cached for reuse across runs
+5. **Dynamic Extraction**: Extracts only the approved entity types from each document chunk
+
+### How to Use
+Simply run the graph processor and it will automatically discover entities from your documents:
+```bash
+python data_processors/graph_processor.py
+```
+
+### Benefits
+- **Adaptive**: Discovers entities relevant to your specific domain (contracts, medical, legal, etc.)
+- **Consistent**: Single entity schema applied across all documents in a corpus
+- **Efficient**: Caches approved schemas to avoid re-discovery
+- **User-Controlled**: You approve all entity types before processing
+
+### Example Discovery Output
+```
+🔍 Analyzing corpus with LLM...
+📋 Proposed entities: Contract, Vendor, Deliverable, Timeline, Budget, Compliance
+✅ Approve these entities? (y/n/edit): y
+🚀 Processing documents with approved entities...
 ```
 
 ## 📚 Customization Guide

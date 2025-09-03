@@ -31,10 +31,6 @@ except ImportError:
 # Add parent directory to path so we can import from the main project
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Basic RAGAS setup following the documentation
-from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAIEmbeddings
-
 # RAGAS imports
 from ragas import EvaluationDataset, evaluate
 from ragas.llms import LangchainLLMWrapper
@@ -81,18 +77,47 @@ except ImportError as e:
     TEXT2CYPHER_AVAILABLE = False
     NEO4J_VECTOR_AVAILABLE = False
 
-# Initialize LLM and embeddings for RAGAS
-SEED = 42
-llm = ChatOpenAI(
-    model="gpt-4.1",
-    temperature=0,
-    model_kwargs={"seed": SEED},
-    max_retries=0
-)
-embeddings = OpenAIEmbeddings()
+# Import centralized model configuration
+try:
+    from config.model_factory import get_llm, get_embeddings
+    from config.model_config import get_model_config
+    
+    print("✅ Model configuration imported successfully")
+    model_config = get_model_config()
+    print(f"🔧 LLM Provider: {model_config.llm_provider.value}")
+    print(f"🔧 LLM Model: {model_config.llm_model.value}")
+    print(f"🔧 Embedding Provider: {model_config.embedding_provider.value}")
+    print(f"🔧 Embedding Model: {model_config.embedding_model.value}")
+    
+    # Initialize LLM and embeddings for RAGAS using centralized configuration
+    SEED = model_config.seed or 42
+    llm = get_llm(
+        temperature=model_config.temperature,
+        seed=SEED,
+        max_retries=0
+    )
+    embeddings = get_embeddings()
+    
+    print("✅ RAGAS models initialized with centralized configuration")
+    
+except ImportError as e:
+    print(f"⚠️  Could not import centralized model configuration: {e}")
+    print("   Falling back to OpenAI models for RAGAS evaluation")
+    
+    # Fallback to OpenAI models
+    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    
+    SEED = 42
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",  # Use a more available model
+        temperature=0,
+        model_kwargs={"seed": SEED},
+        max_retries=0
+    )
+    embeddings = OpenAIEmbeddings()
 
 def load_benchmark_data(csv_path: str = "benchmark/benchmark.csv") -> List[Dict[str, str]]:
-    """Load benchmark questions and ground truth answers"""
+    """Load benchmark questions and ground truth answers from CSV"""
     df = pd.read_csv(csv_path, delimiter=';')
     
     benchmark_data = []
@@ -102,7 +127,29 @@ def load_benchmark_data(csv_path: str = "benchmark/benchmark.csv") -> List[Dict[
             'ground_truth': row['ground_truth']
         })
     
-    print(f"✅ Loaded {len(benchmark_data)} benchmark questions")
+    print(f"✅ Loaded {len(benchmark_data)} benchmark questions from CSV")
+    return benchmark_data
+
+def load_benchmark_data_jsonl(jsonl_path: str) -> List[Dict[str, str]]:
+    """Load benchmark questions and ground truth answers from JSONL"""
+    benchmark_data = []
+    
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            try:
+                record = json.loads(line.strip())
+                benchmark_data.append({
+                    'question': record['question'],
+                    'ground_truth': record['ground_truth'],
+                    # Preserve additional metadata
+                    'record_id': record.get('record_id'),
+                    'source_dataset': record.get('source_dataset'),
+                    'domain': record.get('domain')
+                })
+            except json.JSONDecodeError as e:
+                print(f"⚠️  Skipping invalid JSON on line {line_num}: {e}")
+    
+    print(f"✅ Loaded {len(benchmark_data)} benchmark questions from JSONL")
     return benchmark_data
 
 def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approach: str = "chroma") -> List[Dict[str, Any]]:
@@ -180,9 +227,11 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             # Create RAGAS-compatible data structure with field names expected by metrics
             dataset.append({
                 "user_input": query,
+                "question": query,  # Also include question for RAGBench compatibility
                 "retrieved_contexts": retrieved_contexts,
                 "response": response,
-                "reference": reference
+                "reference": reference,
+                "ground_truth": reference  # Also include ground_truth for RAGBench compatibility
             })
             
             # Small delay to avoid overwhelming the systems
@@ -193,9 +242,11 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             # Add a failure record to maintain dataset consistency
             dataset.append({
                 "user_input": query,
+                "question": query,  # Also include question for RAGBench compatibility
                 "retrieved_contexts": ["Error: Could not retrieve context"],
                 "response": f"Error: {str(e)}",
-                "reference": reference
+                "reference": reference,
+                "ground_truth": reference  # Also include ground_truth for RAGBench compatibility
             })
     
     print(f"✅ Collected {len(dataset)} evaluation records for {approach.upper()}")
@@ -207,6 +258,10 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
     """
     print(f"\n📊 Evaluating {approach_name} using RAGAS metrics...")
     
+    # Force sequential processing to prevent parallel job timeouts
+    os.environ['RAGAS_MAX_WORKERS'] = '1'
+    os.environ['RAGAS_DISABLE_PARALLEL'] = 'true'
+    
     try:
         # Debug: Print first dataset item to check format
         if dataset:
@@ -215,22 +270,154 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         # Create RAGAS evaluation dataset
         evaluation_dataset = EvaluationDataset.from_list(dataset)
         
-        # Prepare evaluator LLM (following RAGAS documentation)
+        # Monkey patch RAGAS timeout settings
+        try:
+            import ragas
+            # Set global timeout for RAGAS operations
+            if hasattr(ragas, '_timeout'):
+                ragas._timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '120'))
+        except:
+            pass
+        
+        # Prepare evaluator LLM with timeout configuration
         evaluator_llm = LangchainLLMWrapper(llm)
         
-        # Use basic metrics that work reliably
+        # Configure timeout for Ollama if needed
+        timeout_attrs = ['timeout', 'request_timeout', 'read_timeout']
+        timeout_found = False
+        for attr in timeout_attrs:
+            if hasattr(llm, attr):
+                timeout_val = getattr(llm, attr)
+                print(f"   ⏱️  Using LLM {attr}: {timeout_val}s")
+                timeout_found = True
+                break
+        
+        if not timeout_found:
+            print("   ⚠️  No explicit timeout configured for LLM")
+            # Check environment variable as fallback
+            env_timeout = os.getenv('OLLAMA_REQUEST_TIMEOUT')
+            if env_timeout:
+                print(f"   📋 Environment timeout: {env_timeout}s")
+        
+        # Use basic metrics with timeout configuration
+        metric_timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '120'))  # 2 minutes per metric
+        
         metrics = [
             LLMContextRecall(),
             Faithfulness(),
             FactualCorrectness()
         ]
         
-        # Run evaluation
-        result = evaluate(
-            dataset=evaluation_dataset,
-            metrics=metrics,
-            llm=evaluator_llm
-        )
+        # Configure timeout for each metric if supported
+        for metric in metrics:
+            if hasattr(metric, 'timeout'):
+                metric.timeout = metric_timeout
+            if hasattr(metric, 'llm') and hasattr(metric.llm, 'timeout'):
+                metric.llm.timeout = metric_timeout
+        
+        # Run evaluation with timeout settings and retry logic
+        max_retries = int(os.getenv('RAGAS_MAX_RETRIES', '2'))
+        for attempt in range(max_retries + 1):
+            try:
+                print(f"   🔄 Evaluation attempt {attempt + 1}/{max_retries + 1}")
+                # Add timeout wrapper around evaluation
+                import signal
+                import functools
+                
+                def timeout_handler(signum, frame):
+                    raise TimeoutError("RAGAS evaluation timed out")
+                
+                def run_with_timeout(func, timeout_seconds):
+                    if os.name == 'nt':  # Windows
+                        # On Windows, use threading timeout
+                        import threading
+                        result = [None]
+                        exception = [None]
+                        
+                        def target():
+                            try:
+                                result[0] = func()
+                            except Exception as e:
+                                exception[0] = e
+                        
+                        thread = threading.Thread(target=target)
+                        thread.daemon = True
+                        thread.start()
+                        thread.join(timeout_seconds)
+                        
+                        if thread.is_alive():
+                            raise TimeoutError("RAGAS evaluation timed out")
+                        if exception[0]:
+                            raise exception[0]
+                        return result[0]
+                    else:  # Unix
+                        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                        signal.alarm(timeout_seconds)
+                        try:
+                            return func()
+                        finally:
+                            signal.alarm(0)
+                            signal.signal(signal.SIGALRM, old_handler)
+                
+                def evaluation_func():
+                    # Force sequential processing to avoid parallel job timeouts
+                    import asyncio
+                    try:
+                        # Try to set event loop policy for better compatibility
+                        if hasattr(asyncio, 'WindowsProactorEventLoopPolicy'):
+                            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+                    except:
+                        pass
+                    
+                    # Set environment variable to force single-threaded execution
+                    original_workers = os.environ.get('RAGAS_MAX_WORKERS')
+                    os.environ['RAGAS_MAX_WORKERS'] = '1'
+                    
+                    try:
+                        result = evaluate(
+                            dataset=evaluation_dataset,
+                            metrics=metrics,
+                            llm=evaluator_llm,
+                            raise_exceptions=False  # Don't fail entire evaluation on single errors
+                        )
+                        return result
+                    finally:
+                        # Restore original setting
+                        if original_workers is not None:
+                            os.environ['RAGAS_MAX_WORKERS'] = original_workers
+                        else:
+                            os.environ.pop('RAGAS_MAX_WORKERS', None)
+                
+                # Run with overall timeout (10 minutes)
+                overall_timeout = int(os.getenv('RAGAS_OVERALL_TIMEOUT', '600'))
+                result = run_with_timeout(evaluation_func, overall_timeout)
+                break  # Success, exit retry loop
+            except Exception as e:
+                if "TimeoutError" in str(e) or "timeout" in str(e).lower():
+                    if attempt < max_retries:
+                        print(f"   ⏱️  Timeout on attempt {attempt + 1}, retrying...")
+                        continue
+                    else:
+                        print(f"   ❌ All retry attempts failed due to timeout")
+                        print(f"   🔄 Attempting evaluation with reduced metrics...")
+                        
+                        # Try with just one metric as fallback
+                        try:
+                            reduced_metrics = [Faithfulness()]  # Most reliable metric
+                            result = evaluate(
+                                dataset=evaluation_dataset,
+                                metrics=reduced_metrics,
+                                llm=evaluator_llm,
+                                raise_exceptions=False
+                            )
+                            print(f"   ✅ Reduced metric evaluation succeeded")
+                            break
+                        except Exception as fallback_error:
+                            print(f"   ❌ Reduced metric evaluation also failed: {fallback_error}")
+                            raise e
+                else:
+                    # Non-timeout error, don't retry
+                    raise e
         
         print(f"✅ {approach_name} evaluation completed")
         
@@ -250,6 +437,13 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                         continue
             
             if numeric_cols:
+                # Calculate success rate for each metric
+                total_samples = len(df)
+                for col in numeric_cols:
+                    successful_samples = df[col].count()  # Non-NaN count
+                    success_rate = successful_samples / total_samples
+                    print(f"   📊 {col}: {successful_samples}/{total_samples} samples ({success_rate:.1%} success)")
+                
                 scores = df[numeric_cols].mean().to_dict()
                 print(f"   📊 Numeric scores: {scores}")
             else:
@@ -550,6 +744,120 @@ def save_results_selective(datasets: Dict, results: Dict, comparison_table: pd.D
         json.dump(results_data, f, indent=2)
     
     print(f"  - simple_benchmark_results.json")
+    
+    # Create detailed human-readable reports
+    create_detailed_reports(datasets, results, approaches, output_dir)
+
+
+def create_detailed_reports(datasets: Dict, results: Dict, approaches: List[str], output_dir: str):
+    """Create detailed human-readable reports with individual responses and scores"""
+    
+    try:
+        # Import the results formatter
+        import sys
+        from pathlib import Path
+        
+        # Add ragbench module to path if not already there
+        ragbench_path = Path(__file__).parent / "ragbench"
+        if str(ragbench_path) not in sys.path:
+            sys.path.append(str(ragbench_path))
+        
+        from results_formatter import RAGBenchResultsFormatter
+        
+        print(f"\n📄 Creating detailed human-readable reports...")
+        
+        # Initialize formatter
+        formatter = RAGBenchResultsFormatter()
+        
+        # Process each approach's dataset
+        approach_names = {
+            'chroma': 'ChromaDB RAG',
+            'graphrag': 'GraphRAG', 
+            'text2cypher': 'Text2Cypher',
+            'advanced_graphrag': 'Advanced GraphRAG',
+            'drift_graphrag': 'DRIFT GraphRAG',
+            'neo4j_vector': 'Neo4j Vector RAG',
+            'hybrid_cypher': 'Hybrid Cypher RAG'
+        }
+        
+        # We need to correlate questions across approaches to group them properly
+        question_groups = {}
+        
+        for approach in approaches:
+            if approach not in datasets or not datasets[approach]:
+                continue
+                
+            dataset = datasets[approach]
+            approach_results = results.get(approach, {})
+            retriever_name = approach_names.get(approach, approach)
+            
+            for i, record in enumerate(dataset):
+                question = record.get("user_input", record.get("question", ""))
+                ground_truth = record.get("reference", record.get("ground_truth", ""))
+                response = record.get("response", "")
+                contexts = record.get("retrieved_contexts", [])
+                
+                # Use question as key to group responses from different retrievers
+                if question not in question_groups:
+                    question_groups[question] = {
+                        "ground_truth": ground_truth,
+                        "responses": []
+                    }
+                
+                # For individual scores, we use the average scores (limitation of current RAGAS integration)
+                # In future, we could modify evaluate_with_ragas_simple to return per-question scores
+                individual_scores = {
+                    metric: score for metric, score in approach_results.items()
+                    if isinstance(score, (int, float))
+                }
+                
+                question_groups[question]["responses"].append({
+                    "retriever_name": retriever_name,
+                    "response": response,
+                    "contexts": contexts,
+                    "scores": individual_scores
+                })
+        
+        # Add all results to formatter
+        for question, question_data in question_groups.items():
+            for response_data in question_data["responses"]:
+                formatter.add_evaluation_result(
+                    question=question,
+                    ground_truth=question_data["ground_truth"],
+                    retriever_name=response_data["retriever_name"],
+                    retriever_response=response_data["response"],
+                    retrieved_contexts=response_data["contexts"],
+                    ragas_scores=response_data["scores"],
+                    metadata={"evaluation_type": "ragas_benchmark"}
+                )
+        
+        # Generate reports
+        html_path = formatter.create_detailed_html_report(
+            output_path=f"{output_dir}/detailed_results.html",
+            title=f"RAG Comparison Results - {' vs '.join([approach_names.get(a, a) for a in approaches])}"
+        )
+        
+        csv_path = formatter.create_comparison_csv(
+            output_path=f"{output_dir}/detailed_comparison.csv"
+        )
+        
+        summary_path = formatter.create_summary_report(
+            output_path=f"{output_dir}/summary_report.json"
+        )
+        
+        print(f"  - detailed_results.html (human-readable report)")
+        print(f"  - detailed_comparison.csv (detailed data)")
+        print(f"  - summary_report.json (aggregated statistics)")
+        
+        print(f"\n🌐 Open {html_path} in your browser to review detailed results!")
+        
+    except ImportError as e:
+        print(f"⚠️  Could not create detailed reports: {e}")
+        print("   Detailed reporting requires the ragbench.results_formatter module")
+    except Exception as e:
+        print(f"⚠️  Error creating detailed reports: {e}")
+        import traceback
+        traceback.print_exc()
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -613,6 +921,19 @@ Examples:
         default='benchmark_outputs',
         help='Output directory for results (default: benchmark_outputs)'
     )
+    parser.add_argument(
+        '--csv',
+        help='Path to CSV benchmark file (default: benchmark/benchmark.csv)'
+    )
+    parser.add_argument(
+        '--jsonl',
+        help='Path to JSONL benchmark file (overrides --csv if provided)'
+    )
+    parser.add_argument(
+        '--limit',
+        type=int,
+        help='Limit the number of evaluation samples (useful for testing)'
+    )
     
     args = parser.parse_args()
     
@@ -659,9 +980,10 @@ Examples:
             default_approaches.append('hybrid_cypher')
         approaches = default_approaches
     
-    return approaches, args.output_dir
+    return approaches, args.output_dir, args.csv, args.jsonl, args.limit
 
-def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs"):
+def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs", 
+                  csv_path: str = None, jsonl_path: str = None, limit: int = None):
     """Main benchmarking function with selective approach testing"""
     
     approach_names = {
@@ -679,8 +1001,19 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs")
     print(f"🚀 Starting Selective RAGAS Benchmark: {' vs '.join(selected_names)}")
     print("=" * 80)
     
-    # Load benchmark data
-    benchmark_data = load_benchmark_data()
+    # Load benchmark data (prefer JSONL over CSV)
+    if jsonl_path:
+        benchmark_data = load_benchmark_data_jsonl(jsonl_path)
+    elif csv_path:
+        benchmark_data = load_benchmark_data(csv_path)
+    else:
+        benchmark_data = load_benchmark_data()  # Default CSV
+    
+    # Apply limit if specified
+    if limit and limit > 0:
+        original_count = len(benchmark_data)
+        benchmark_data = benchmark_data[:limit]
+        print(f"🔢 Limited evaluation data from {original_count} to {len(benchmark_data)} samples")
     
     # Collect evaluation data for selected approaches
     print(f"\n📋 Phase 1: Data Collection")
@@ -790,7 +1123,7 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs")
 
 if __name__ == "__main__":
     # Parse command line arguments
-    approaches, output_dir = parse_arguments()
+    approaches, output_dir, csv_path, jsonl_path, limit = parse_arguments()
     
     # Run selective benchmark
-    results = main_selective(approaches, output_dir) 
+    results = main_selective(approaches, output_dir, csv_path, jsonl_path, limit) 

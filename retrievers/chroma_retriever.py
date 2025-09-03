@@ -1,18 +1,20 @@
 """
 ChromaDB Retriever - Traditional Vector Similarity Search
 
-This module implements traditional RAG using ChromaDB with OpenAI embeddings
+This module implements traditional RAG using ChromaDB with configurable embeddings
 for vector similarity search and LLM response generation.
+Supports both OpenAI API and Ollama local models.
 """
 
 import os
 from dotenv import load_dotenv
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langchain_chroma import Chroma
-from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
-from neo4j_graphrag.llm import OpenAILLM
 import warnings
 import logging
+
+# Import centralized configuration
+from config import get_model_config, get_embeddings, get_neo4j_llm, ModelProvider
 
 # Load environment variables
 load_dotenv()
@@ -31,24 +33,31 @@ warnings.filterwarnings("ignore", category=UserWarning, module="chromadb")
 PERSIST_DIRECTORY = "chroma_db"
 COLLECTION_NAME = "rfp_docs"
 
-# Initialize LLM with deterministic settings
-SEED = 42
-llm = OpenAILLM(
-    model_name="gpt-4o-mini", 
-    model_params={
-        "temperature": 0,
-        "seed": SEED
-    }
-)
-
 class ChromaRetriever:
-    """Traditional ChromaDB vector similarity search retriever"""
+    """Traditional ChromaDB vector similarity search retriever with configurable models"""
     
-    def __init__(self, persist_directory: str = PERSIST_DIRECTORY, collection_name: str = COLLECTION_NAME):
+    def __init__(self, persist_directory: str = PERSIST_DIRECTORY, collection_name: str = COLLECTION_NAME, 
+                 model_config: Optional[Any] = None):
         self.persist_directory = persist_directory
         self.collection_name = collection_name
-        self.embeddings = OpenAIEmbeddings()
-        self.llm = llm
+        self.config = model_config or get_model_config()
+        
+        # Initialize models based on configuration
+        self.embeddings = get_embeddings()
+        
+        # Use Neo4j GraphRAG LLM for OpenAI, regular LLM for Ollama
+        try:
+            if self.config.llm_provider == ModelProvider.OPENAI:
+                self.llm = get_neo4j_llm()
+            else:
+                # For Ollama, use regular LangChain LLM
+                from config import get_llm
+                self.llm = get_llm()
+        except Exception as e:
+            warnings.warn(f"Could not initialize configured LLM, falling back to default: {e}")
+            # Fallback to regular LLM
+            from config import get_llm
+            self.llm = get_llm()
         
         # Suppress ChromaDB telemetry
         try:
@@ -103,8 +112,15 @@ Retrieved Documents:
 Please provide a well-structured, informative response based on the retrieved information. If the documents don't contain enough information to fully answer the question, please indicate what information is missing."""
 
         try:
-            llm_response = self.llm.invoke(prompt)
-            final_answer = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            # Handle different LLM response formats
+            if self.config.llm_provider == ModelProvider.OPENAI and hasattr(self.llm, 'invoke'):
+                # Neo4j GraphRAG LLM
+                llm_response = self.llm.invoke(prompt)
+                final_answer = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            else:
+                # Regular LangChain LLM (including Ollama)
+                llm_response = self.llm.invoke(prompt)
+                final_answer = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
         except Exception as e:
             final_answer = f"Error generating LLM response: {e}"
         
@@ -122,9 +138,10 @@ Please provide a well-structured, informative response based on the retrieved in
 
 
 # Factory function for easy instantiation
-def create_chroma_retriever(persist_directory: str = PERSIST_DIRECTORY, collection_name: str = COLLECTION_NAME) -> ChromaRetriever:
-    """Create a ChromaDB retriever instance"""
-    return ChromaRetriever(persist_directory, collection_name)
+def create_chroma_retriever(persist_directory: str = PERSIST_DIRECTORY, collection_name: str = COLLECTION_NAME, 
+                          model_config: Optional[Any] = None) -> ChromaRetriever:
+    """Create a ChromaDB retriever instance with configurable models"""
+    return ChromaRetriever(persist_directory, collection_name, model_config)
 
 
 

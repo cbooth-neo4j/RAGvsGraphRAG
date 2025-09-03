@@ -36,11 +36,16 @@ except ImportError as e:
     process_pdfs = None
 
 try:
-    from .graph_processor import CustomGraphProcessor
-    BASIC_GRAPH_PROCESSOR_AVAILABLE = True
+    # Import the new refactored processor with advanced features
+    from .build_graph import CustomGraphProcessor
+    # Keep the old GraphProcessor for backwards compatibility
+    try:
+        from .graph_processor import GraphProcessor as LegacyGraphProcessor
+        GraphProcessor = LegacyGraphProcessor  # Alias for compatibility
+    except ImportError:
+        GraphProcessor = CustomGraphProcessor  # Use new one if old doesn't exist
     
-    # Create alias for compatibility
-    GraphProcessor = CustomGraphProcessor
+    BASIC_GRAPH_PROCESSOR_AVAILABLE = True
     
     # Create wrapper function for compatibility
     def create_graph_from_chunks(chunks_directory: str = "processed_docs"):
@@ -50,22 +55,25 @@ try:
         finally:
             processor.close()
     
-    print("✅ Basic graph processor imported successfully")
+    print("✅ Enhanced graph processor imported successfully (build_graph with advanced features)")
 except ImportError as e:
-    print(f"⚠️ Basic graph processor not available: {e}")
-    BASIC_GRAPH_PROCESSOR_AVAILABLE = False
-    GraphProcessor = None
-    CustomGraphProcessor = None
-    create_graph_from_chunks = None
+    print(f"⚠️ Enhanced graph processor not available: {e}")
+    try:
+        # Fallback to old processor
+        from .graph_processor import CustomGraphProcessor
+        from .graph_processor import GraphProcessor
+        BASIC_GRAPH_PROCESSOR_AVAILABLE = True
+        print("✅ Fallback: Legacy graph processor imported successfully")
+    except ImportError as e2:
+        print(f"⚠️ No graph processors available: {e2}")
+        BASIC_GRAPH_PROCESSOR_AVAILABLE = False
+        GraphProcessor = None
+        CustomGraphProcessor = None
+        create_graph_from_chunks = None
 
-try:
-    from .advanced_graph_processor import AdvancedGraphProcessor
-    ADVANCED_GRAPH_PROCESSOR_AVAILABLE = True
-    print("✅ Advanced graph processor imported successfully")
-except ImportError as e:
-    print(f"⚠️ Advanced graph processor not available: {e}")
-    ADVANCED_GRAPH_PROCESSOR_AVAILABLE = False
-    AdvancedGraphProcessor = None
+# Advanced processing is now integrated into build_graph/CustomGraphProcessor
+ADVANCED_GRAPH_PROCESSOR_AVAILABLE = False
+AdvancedGraphProcessor = None
 
 # Central registry of all available processors
 AVAILABLE_PROCESSORS = {
@@ -76,19 +84,12 @@ AVAILABLE_PROCESSORS = {
         'description': 'Extract and chunk text from PDF documents for ChromaDB',
         'available': CHROMA_PROCESSOR_AVAILABLE
     },
-    'basic_graph_processor': {
-        'class': GraphProcessor if BASIC_GRAPH_PROCESSOR_AVAILABLE else None,
+    'graph_processor': {
+        'class': CustomGraphProcessor if BASIC_GRAPH_PROCESSOR_AVAILABLE else None,
         'function': create_graph_from_chunks if BASIC_GRAPH_PROCESSOR_AVAILABLE else None,
-        'name': 'Basic Graph Processor',
-        'description': 'Basic Neo4j graph construction from processed documents',
+        'name': 'Graph Processor',
+        'description': 'Complete Neo4j graph processing with entity discovery, summarization, and community detection (always includes advanced features)',
         'available': BASIC_GRAPH_PROCESSOR_AVAILABLE
-    },
-    'advanced_graph_processor': {
-        'class': AdvancedGraphProcessor if ADVANCED_GRAPH_PROCESSOR_AVAILABLE else None,
-        'function': None,  # AdvancedGraphProcessor doesn't have a standalone function
-        'name': 'Advanced Graph Processor',
-        'description': 'Enhanced graph processing with entity resolution, element summarization, and community detection',
-        'available': ADVANCED_GRAPH_PROCESSOR_AVAILABLE
     }
 }
 
@@ -112,11 +113,7 @@ def create_basic_graph_processor():
     return GraphProcessor()
 
 
-def create_advanced_graph_processor():
-    """Create an advanced graph processor instance"""
-    if not ADVANCED_GRAPH_PROCESSOR_AVAILABLE:
-        raise ImportError("Advanced graph processor not available. Check dependencies.")
-    return AdvancedGraphProcessor()
+# create_advanced_graph_processor is deprecated - use create_basic_graph_processor (includes advanced features)
 
 
 def process_pdfs(pdf_directory: str, output_directory: str = "processed_docs"):
@@ -234,11 +231,7 @@ def test_all_processors():
                 processor = create_basic_graph_processor()
                 results[processor_type] = {'status': 'available', 'class': type(processor).__name__}
                 print(f"✅ {info['name']}: Available")
-            elif processor_type == 'advanced_graph_processor':
-                processor = create_advanced_graph_processor()
-                results[processor_type] = {'status': 'available', 'class': type(processor).__name__}
-                processor.close()  # Clean up
-                print(f"✅ {info['name']}: Available")
+            # advanced_graph_processor is deprecated - integrated into basic_graph_processor
         except Exception as e:
             print(f"❌ {info['name']}: Failed - {e}")
             results[processor_type] = {'status': 'error', 'error': str(e)}
@@ -261,7 +254,7 @@ __all__ = [
     # Factory functions
     'create_chroma_processor',
     'create_basic_graph_processor',
-    'create_advanced_graph_processor',
+    # 'create_advanced_graph_processor',  # Deprecated - integrated into basic
     
     # High-level processing functions
     'process_pdfs',
