@@ -50,7 +50,7 @@ from config import get_model_config, get_embeddings, get_llm, ModelProvider
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
-LLM = os.environ.get('OPENAI_MODEL_NAME', os.environ.get('LLM_FALLBACK_MODEL', 'qwen3:8b'))  # Use configurable fallback
+LLM = os.environ.get('OPENAI_MODEL_NAME', os.environ.get('LLM_FALLBACK_MODEL', 'llama3.1:8b'))  # Use configurable fallback
 
 class DuplicateEntities(BaseModel):
     entities: List[str] = Field(
