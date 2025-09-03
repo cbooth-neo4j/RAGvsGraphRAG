@@ -34,16 +34,13 @@ class LLMModel(Enum):
     # OpenAI models
     OPENAI_GPT_4O_MINI = "gpt-4o-mini"
     OPENAI_GPT_41_MINI = "gpt-4.1-mini"
-    OPENAI_GPT_4O = "gpt-4o"
-    OPENAI_GPT_4_TURBO = "gpt-4-turbo"
-    OPENAI_GPT_35_TURBO = "gpt-3.5-turbo"
+
     
     # Ollama models - Add new models as needed
     OLLAMA_QWEN3_8B = "qwen3:8b"
-    OLLAMA_GEMMA3_7B = "gemma3:7b"
+    OLLAMA_GEMMA3_7B = "gemma3:1b"
     OLLAMA_GEMMA3_12B = "gemma3:12b"
-    OLLAMA_LLAMA3_8B = "llama3:8b"
-    OLLAMA_MISTRAL_7B = "mistral:7b"
+    OLLAMA_LLAMA3_1_8B = "llama3.1:8b"
 
 
 @dataclass
@@ -75,7 +72,7 @@ class ModelConfig:
         self.embedding_provider = ModelProvider(os.getenv('EMBEDDING_PROVIDER', 'openai'))
         
         # Load model names
-        llm_model_name = os.getenv('LLM_MODEL', os.getenv('LLM_FALLBACK_MODEL', 'qwen3:8b'))
+        llm_model_name = os.getenv('LLM_MODEL', os.getenv('LLM_FALLBACK_MODEL', 'llama3.1:8b'))
         embedding_model_name = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
         
         # Map model names to enums
@@ -97,19 +94,15 @@ class ModelConfig:
             # OpenAI models
             'gpt-4o-mini': LLMModel.OPENAI_GPT_4O_MINI,
             'gpt-4.1-mini': LLMModel.OPENAI_GPT_41_MINI,
-            'gpt-4o': LLMModel.OPENAI_GPT_4O,
-            'gpt-4-turbo': LLMModel.OPENAI_GPT_4_TURBO,
-            'gpt-3.5-turbo': LLMModel.OPENAI_GPT_35_TURBO,
             # Ollama models
             'qwen3:8b': LLMModel.OLLAMA_QWEN3_8B,
-            'gemma3:7b': LLMModel.OLLAMA_GEMMA3_7B,
+            'gemma3:1b': LLMModel.OLLAMA_GEMMA3_7B,
             'gemma3:12b': LLMModel.OLLAMA_GEMMA3_12B,
-            'llama3:8b': LLMModel.OLLAMA_LLAMA3_8B,
-            'mistral:7b': LLMModel.OLLAMA_MISTRAL_7B,
+            'llama3.1:8b': LLMModel.OLLAMA_LLAMA3_1_8B,
         }
         # Use configurable fallback instead of hardcoded default
-        fallback_model = os.getenv('LLM_FALLBACK_MODEL', 'qwen3:8b')
-        fallback_enum = model_mapping.get(fallback_model, LLMModel.OLLAMA_QWEN3_8B)
+        fallback_model = os.getenv('LLM_FALLBACK_MODEL', 'llama3.1:8b')
+        fallback_enum = model_mapping.get(fallback_model, LLMModel.OLLAMA_LLAMA3_1_8B)
         return model_mapping.get(model_name, fallback_enum)
     
     def _get_embedding_model_enum(self, model_name: str) -> EmbeddingModel:

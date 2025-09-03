@@ -93,13 +93,13 @@ cp env.example .env
 
 # Edit .env to configure your models
 LLM_PROVIDER=ollama          # or 'openai'
-LLM_MODEL=qwen3:8b          # or 'gpt-4o-mini'
+LLM_MODEL=llama3.1:8b          # or 'gpt-4o-mini'
 EMBEDDING_PROVIDER=ollama    # or 'openai'
 EMBEDDING_MODEL=nomic-embed-text  # or 'text-embedding-3-small'
 ```
 
 **Supported Ollama Models:**
-- LLM: `qwen3:8b`, `gemma3:7b`, `llama3:8b`, `mistral:7b`
+- LLM: `llama3.1:8b`, `qwen3:8b`, `gemma3:1b`, `gemma3:12b`
 - Embeddings: `nomic-embed-text`
 
 **Supported OpenAI Models:**

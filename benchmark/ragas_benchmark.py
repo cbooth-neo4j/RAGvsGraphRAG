@@ -832,24 +832,11 @@ def create_detailed_reports(datasets: Dict, results: Dict, approaches: List[str]
                 )
         
         # Generate reports
-        html_path = formatter.create_detailed_html_report(
-            output_path=f"{output_dir}/detailed_results.html",
-            title=f"RAG Comparison Results - {' vs '.join([approach_names.get(a, a) for a in approaches])}"
-        )
-        
         csv_path = formatter.create_comparison_csv(
             output_path=f"{output_dir}/detailed_comparison.csv"
         )
         
-        summary_path = formatter.create_summary_report(
-            output_path=f"{output_dir}/summary_report.json"
-        )
-        
-        print(f"  - detailed_results.html (human-readable report)")
         print(f"  - detailed_comparison.csv (detailed data)")
-        print(f"  - summary_report.json (aggregated statistics)")
-        
-        print(f"\n🌐 Open {html_path} in your browser to review detailed results!")
         
     except ImportError as e:
         print(f"⚠️  Could not create detailed reports: {e}")

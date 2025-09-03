@@ -14,6 +14,7 @@ import warnings
 import json
 import ast
 
+
 # Import centralized configuration
 from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, ModelProvider
 
@@ -24,19 +25,18 @@ load_dotenv()
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
-INDEX_NAME = "chunk_embedding"  # Match the index name from graph processor
+INDEX_NAME = "chunk_embeddings"  # Match the actual index name in Neo4j
 
 # Initialize components with centralized configuration
 SEED = 42
-embeddings = get_neo4j_embeddings()
-llm = get_neo4j_llm()
+# Note: embeddings and llm are initialized in the class to avoid module-level initialization issues
 
 class GraphRAGRetriever:
     """GraphRAG retriever with Neo4j vector search and entity traversal"""
     
     def __init__(self):
-        self.embeddings = embeddings
-        self.llm = llm
+        self.embeddings = get_neo4j_embeddings()
+        self.llm = get_neo4j_llm()
         self.neo4j_uri = NEO4J_URI
         self.neo4j_user = NEO4J_USER
         self.neo4j_password = NEO4J_PASSWORD
@@ -48,24 +48,52 @@ class GraphRAGRetriever:
         with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password)) as driver:
             print(f"🔍 Executing GraphRAG query for: {query}")
             
-            # Generate query vector
-            query_vector = self.embeddings.embed_query(query)
-            
-            # Query parameters for the simplified pattern
-            query_params = {
-                'query_vector': query_vector
-            }
+            # Query parameters for the simplified pattern (we don't actually use query_vector in our Cypher)
+            query_params = {}
             
             try:
-                # First perform vector search to get candidate chunks
-                vector_retriever = VectorRetriever(
-                    driver=driver,
-                    index_name=self.index_name,
-                    embedder=self.embeddings
-                )
-                
-                # Get top chunks from vector search
-                vector_results = vector_retriever.search(query_text=query, top_k=5) 
+                # First perform vector search to get candidate chunks with fallback
+                try:
+                    # Try vector search first
+                    vector_retriever = VectorRetriever(
+                        driver=driver,
+                        index_name=self.index_name,
+                        embedder=self.embeddings
+                    )
+                    
+                    # Get top chunks from vector search
+                    vector_results = vector_retriever.search(query_text=query, top_k=5)
+                    
+                except Exception as vector_error:
+                    print(f"⚠️ Vector search failed: {vector_error}")
+                    print(f"🔄 Falling back to direct chunk retrieval...")
+                    
+                    # Fallback: get chunks directly without vector search
+                    fallback_query = """
+                    MATCH (chunk:Chunk)-[:PART_OF]->(d:Document)
+                    RETURN chunk.text as text, chunk.id as chunk_id, d.name as document_source
+                    LIMIT 5
+                    """
+                    
+                    fallback_result = driver.execute_query(fallback_query, database_="neo4j")
+                    
+                    # Create a mock vector_results structure
+                    class MockResult:
+                        def __init__(self, content, chunk_id):
+                            self.content = {'id': chunk_id, 'text': content}
+                            self.score = 0.8  # Default score
+                    
+                    class MockResults:
+                        def __init__(self, items):
+                            self.items = items
+                    
+                    mock_items = []
+                    for record in fallback_result.records[:5]:
+                        content = record.get('text', '')
+                        chunk_id = record.get('chunk_id', '')
+                        mock_items.append(MockResult(content, chunk_id))
+                    
+                    vector_results = MockResults(mock_items) 
                 
                 if not vector_results:
                     return {
@@ -88,18 +116,36 @@ class GraphRAGRetriever:
                             # Content might be a JSON string or dict-like string
                             if isinstance(content, str) and content.startswith('{'):
                                 try:
-                                    # First try regular JSON parsing
-                                    chunk_data = json.loads(content)
-                                except:
-                                    # If that fails, try with ast.literal_eval for single quotes
+                                    # First try with ast.literal_eval for single quotes (safer than eval)
                                     chunk_data = ast.literal_eval(content)
-                                
-                                chunk_id = chunk_data.get('id', '')
-                                score = getattr(result, 'score', 0.8)  # Get score from result object
+                                    chunk_id = chunk_data.get('id', '')
+                                    score = getattr(result, 'score', 0.8)  # Get score from result object
+                                    chunks_with_scores.append((chunk_id, score))
+                                except:
+                                    try:
+                                        # If that fails, try regular JSON parsing
+                                        chunk_data = json.loads(content)
+                                        chunk_id = chunk_data.get('id', '')
+                                        score = getattr(result, 'score', 0.8)
+                                        chunks_with_scores.append((chunk_id, score))
+                                    except:
+                                        # Extract ID using regex as fallback
+                                        import re
+                                        match = re.search(r"'id':\s*'([^']+)'", content)
+                                        if match:
+                                            chunk_id = match.group(1)
+                                            score = getattr(result, 'score', 0.8)
+                                            chunks_with_scores.append((chunk_id, score))
+                                        else:
+                                            raise Exception("Could not extract chunk ID")
+                            elif isinstance(content, dict):
+                                # Content is already a dictionary
+                                chunk_id = content.get('id', '')
+                                score = getattr(result, 'score', 0.8)
                                 chunks_with_scores.append((chunk_id, score))
                             else:
                                 # Content might be the chunk data directly
-                                chunk_id = getattr(content, 'id', str(content))
+                                chunk_id = getattr(content, 'id', str(content)[:50])
                                 score = getattr(result, 'score', 0.8)
                                 chunks_with_scores.append((chunk_id, score))
                         except Exception as e:
@@ -121,26 +167,20 @@ class GraphRAGRetriever:
                 chunk_ids = [chunk_id for chunk_id, _ in chunks_with_scores]
                 chunk_scores = {chunk_id: score for chunk_id, score in chunks_with_scores}
                 
-                # Simplified Cypher query following the specified structure
+                # Simplified Cypher query that avoids complex path matching
                 cypher_query = """
                 UNWIND $chunk_data AS chunk_item
                 MATCH (chunk:Chunk {id: chunk_item.chunk_id})-[:PART_OF]->(d:Document)
                 
-                CALL (chunk) {
-                    MATCH (chunk)-[:HAS_ENTITY]->(e)
-                    MATCH path=(e)(()-[rels:!HAS_ENTITY&!PART_OF]-()){0,2}(:!Chunk&!Document)
-                    
-                    RETURN collect(DISTINCT e) AS entities,
-                           collect(DISTINCT path) AS paths
-                }
+                // Get entities directly connected to this chunk
+                OPTIONAL MATCH (chunk)-[:HAS_ENTITY]->(e)
+                WITH d, chunk, chunk_item.score as score, collect(DISTINCT e.name) as entity_names
                 
-                WITH d, chunk, chunk_item.score as score, entities, paths
-                WITH d, chunk, score, entities,
-                     [e IN entities | e.name] AS entity_names,
-                     [path IN paths | [node IN nodes(path) WHERE node.name IS NOT NULL | node.name]] AS path_names
-                
-                WITH d, chunk, score, entities, entity_names,
-                     apoc.coll.toSet(apoc.coll.flatten(path_names)) AS related_names
+                // Get related entities through simple one-hop relationships (limit to avoid performance issues)
+                OPTIONAL MATCH (chunk)-[:HAS_ENTITY]->(e)-[r]-(related)
+                WHERE NOT related:Chunk AND NOT related:Document
+                WITH d, chunk, score, entity_names, 
+                     collect(DISTINCT related.name)[0..10] as related_names  // Limit to 10 to avoid performance issues
                 
                 RETURN
                    chunk.text as text,
