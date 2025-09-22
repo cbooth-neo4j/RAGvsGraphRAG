@@ -166,6 +166,7 @@ class GraphOperationsMixin:
             # Create full-text search indexes
             indexes = [
                 "CREATE FULLTEXT INDEX entity_text_index IF NOT EXISTS FOR (e:Entity) ON EACH [e.text]",
+                "CREATE FULLTEXT INDEX entity_fulltext_idx IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name, e.description]",
                 "CREATE FULLTEXT INDEX chunk_text_index IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text]"
             ]
             
@@ -175,33 +176,20 @@ class GraphOperationsMixin:
                 except Exception as e:
                     print(f"Index may already exist: {e}")
             
-            # Create vector indexes for embeddings with dynamic dimensions
+            # Create single unified vector index for all nodes with embeddings
             vector_indexes = [
                 f"""
-                CREATE VECTOR INDEX document_embeddings IF NOT EXISTS
-                FOR (d:Document) ON (d.embedding)
-                OPTIONS {{indexConfig: {{
-                    `vector.dimensions`: {vector_dimensions},
-                    `vector.similarity_function`: 'cosine'
-                }}}}
-                """,
-                f"""
-                CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS
-                FOR (c:Chunk) ON (c.embedding)
-                OPTIONS {{indexConfig: {{
-                    `vector.dimensions`: {vector_dimensions},
-                    `vector.similarity_function`: 'cosine'
-                }}}}
-                """,
-                f"""
-                CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS
-                FOR (e:Entity) ON (e.embedding)
+                CREATE VECTOR INDEX embedding IF NOT EXISTS
+                FOR (n:__Entity__) ON (n.embedding)
                 OPTIONS {{indexConfig: {{
                     `vector.dimensions`: {vector_dimensions},
                     `vector.similarity_function`: 'cosine'
                 }}}}
                 """
             ]
+            
+            # Note: Using single unified embedding index for simplicity
+            # All nodes (Document, Chunk, __Entity__) will use the same 'embedding' index
             
             for index in vector_indexes:
                 try:
@@ -295,14 +283,13 @@ class GraphOperationsMixin:
                     MERGE (e:Entity {{id: $entity_id}})
                     ON CREATE SET 
                         e.text = $entity_text,
-                        e.type = $entity_type,
                         e.description = $description,
                         e.embedding = $embedding,
                         e.created_at = datetime()
                     ON MATCH SET
                         e.description = CASE WHEN e.description = '' THEN $description ELSE e.description END
                 """, entity_id=entity_id, entity_text=entity_text, 
-                    entity_type=entity_type, description=entity.get('description', ''),
+                    description=entity.get('description', ''),
                     embedding=entity_embedding)
                 
                 # Add dynamic label to entity (using APOC if available, otherwise skip)
@@ -350,16 +337,14 @@ class GraphOperationsMixin:
                 session.run(f"""
                     MERGE (e:__Entity__ {{id: $unique_id}})
                     ON CREATE SET e.name = $name, e.description = $description, e.embedding = $embedding,
-                                e.entity_type = $entity_type, e.human_readable_id = $human_id,
                                 e:{entity_type}
                     ON MATCH SET e.description = CASE WHEN e.description IS NULL THEN $description ELSE e.description END,
-                               e.embedding = CASE WHEN e.embedding IS NULL THEN $embedding ELSE e.embedding END,
-                               e.human_readable_id = CASE WHEN e.human_readable_id IS NULL THEN $human_id ELSE e.human_readable_id END
+                               e.embedding = CASE WHEN e.embedding IS NULL THEN $embedding ELSE e.embedding END
                     WITH e
                     MERGE (c:Chunk {{id: $chunk_id}})
                     MERGE (c)-[:HAS_ENTITY]->(e)
                 """, unique_id=unique_id, name=entity_name, description=entity_description, 
-                    embedding=entity_embedding, chunk_id=chunk_id, human_id=entity_counter, entity_type=entity_type)
+                    embedding=entity_embedding, chunk_id=chunk_id)
                 
                 entity_ids.append((entity_type, entity_name))
         

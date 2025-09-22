@@ -7,8 +7,6 @@ Supports switching between OpenAI API and Ollama local models.
 
 from .model_config import (
     ModelProvider,
-    EmbeddingModel, 
-    LLMModel,
     ModelConfig,
     get_model_config,
     set_model_config,
@@ -27,8 +25,6 @@ from .model_factory import (
 __all__ = [
     # Configuration classes and enums
     'ModelProvider',
-    'EmbeddingModel',
-    'LLMModel', 
     'ModelConfig',
     
     # Configuration management

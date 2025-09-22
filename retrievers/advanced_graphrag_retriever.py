@@ -154,7 +154,7 @@ class Neo4jVectorStore:
                 result = session.run("SHOW INDEXES").data()
                 index_names = [idx.get('name', '') for idx in result]
                 
-                if 'entity_embedding' not in index_names:
+                if 'embedding' not in index_names:
                     # Check if we have entities with embeddings
                     count_result = session.run("""
                         MATCH (e:__Entity__) 
@@ -164,14 +164,14 @@ class Neo4jVectorStore:
                     
                     if count_result and count_result['count'] > 0:
                         session.run("""
-                            CREATE VECTOR INDEX entity_embedding IF NOT EXISTS 
-                            FOR (e:__Entity__) ON e.embedding
+                            CREATE VECTOR INDEX embedding IF NOT EXISTS 
+                            FOR (n:__Entity__|Document|Chunk) ON n.embedding
                             OPTIONS {indexConfig: {
                                 `vector.dimensions`: 1536,
                                 `vector.similarity_function`: 'cosine'
                             }}
                         """)
-                        logger.info("Created entity_embedding vector index")
+                        logger.info("Created embedding vector index")
                     else:
                         logger.warning("No entities with embeddings found, skipping vector index creation")
         except Exception as e:
@@ -192,7 +192,7 @@ class Neo4jVectorStore:
             try:
                 query_embedding = self.embedding_model.embed_query(query)
                 result = session.run("""
-                    CALL db.index.vector.queryNodes('entity_embedding', $k, $query_embedding)
+                    CALL db.index.vector.queryNodes('embedding', $k, $query_embedding)
                     YIELD node, score
                     RETURN node.id as id,
                            node.name as title,
@@ -1618,6 +1618,7 @@ class GlobalSearch:
                 except json.JSONDecodeError:
                     # If still failing, log the problematic response and return default
                     logger.error(f"Could not parse JSON response. Original: {original_response[:500]}...")
+                    print(f"JSON parsing failed. Raw response: {original_response[:200]}...")
                     return [{"answer": "", "score": 0}]
             
             if not isinstance(parsed_json, dict):
@@ -1634,6 +1635,9 @@ class GlobalSearch:
                 
                 if not parsed_elements:
                     logger.warning("No 'points' or alternative keys found in parsed JSON")
+                    logger.warning(f"Parsed JSON keys: {list(parsed_json.keys()) if isinstance(parsed_json, dict) else 'Not a dict'}")
+                    logger.warning(f"Full parsed JSON: {parsed_json}")
+                    print(f"Warning: Empty or default response from parsing - may indicate LLM response issues")
                     return [{"answer": "", "score": 0}]
             
             if not isinstance(parsed_elements, list):

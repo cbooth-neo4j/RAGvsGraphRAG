@@ -32,7 +32,7 @@ class PrimerConfig:
     max_communities: int = 8
     max_follow_ups: int = 3
     min_score_threshold: float = 20.0
-    temperature: float = 0.1
+    # Removed temperature - let models use their defaults
     use_hyde: bool = True
 
 class DRIFTPrimer:

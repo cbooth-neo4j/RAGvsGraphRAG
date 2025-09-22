@@ -48,7 +48,7 @@ class LLMFactory:
         
         if config.llm_provider == ModelProvider.OPENAI:
             return ChatOpenAI(
-                model=config.llm_model.value,
+                model=config.llm_model,
                 openai_api_key=config.openai_api_key,
                 **model_params
             )
@@ -63,7 +63,7 @@ class LLMFactory:
                 timeout = base_timeout
             
             ollama_params = {
-                'model': config.llm_model.value,
+                'model': config.llm_model,
                 'base_url': config.ollama_base_url,
                 'timeout': timeout,
                 'keep_alive': os.getenv('OLLAMA_KEEP_ALIVE', '10m'),
@@ -96,7 +96,7 @@ class LLMFactory:
             model_params.update(kwargs)
             
             return OpenAILLM(
-                model_name=config.llm_model.value,
+                model_name=config.llm_model,
                 model_params=model_params
             )
         elif config.llm_provider == ModelProvider.OLLAMA:
@@ -127,7 +127,7 @@ class EmbeddingFactory:
         
         if config.embedding_provider == ModelProvider.OPENAI:
             return OpenAIEmbeddings(
-                model=config.embedding_model.value,
+                model=config.embedding_model,
                 openai_api_key=config.openai_api_key,
                 **kwargs
             )
@@ -135,7 +135,7 @@ class EmbeddingFactory:
             # OllamaEmbeddings doesn't support request_timeout parameter
             # Timeout is handled at the HTTP client level
             ollama_params = {
-                'model': config.embedding_model.value,
+                'model': config.embedding_model,
                 'base_url': config.ollama_base_url,
                 **kwargs
             }
@@ -163,7 +163,7 @@ class EmbeddingFactory:
         
         if config.embedding_provider == ModelProvider.OPENAI:
             return Neo4jOpenAIEmbeddings(
-                model=config.embedding_model.value,
+                model=config.embedding_model,
                 **kwargs
             )
         elif config.embedding_provider == ModelProvider.OLLAMA:

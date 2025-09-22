@@ -19,13 +19,13 @@ import ast
 from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, ModelProvider
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Neo4j configuration
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
-INDEX_NAME = "chunk_embeddings"  # Match the actual index name in Neo4j
+INDEX_NAME = "embedding"  # Match the actual index name in Neo4j
 
 # Initialize components with centralized configuration
 SEED = 42

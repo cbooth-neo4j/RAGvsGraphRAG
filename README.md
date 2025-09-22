@@ -127,7 +127,7 @@ python data_processors/process_data.py --list-presets
 
 ### 4. Run Evaluation
 ```bash
-# Compare all RAG approaches
+# Compare all RAG approaches (uses default benchmark.csv with 18 questions)
 python benchmark/ragas_benchmark.py --all
 
 # Use RAGBench evaluation data (automatically created during processing)
@@ -136,6 +136,19 @@ python benchmark/ragas_benchmark.py --all --jsonl benchmark/ragbench__nano_bench
 # Selective testing
 python benchmark/ragas_benchmark.py --chroma --graphrag --text2cypher
 ```
+
+#### **📁 Benchmark File Selection Priority:**
+1. **`--jsonl file.jsonl`** → Uses specified JSONL file (highest priority)
+2. **`--csv file.csv`** → Uses specified CSV file  
+3. **No file specified** → Uses default `benchmark/benchmark.csv` (18 questions)
+
+```bash
+# Examples:
+python benchmark/ragas_benchmark.py --hybrid-cypher                    # Uses default CSV
+python benchmark/ragas_benchmark.py --hybrid-cypher --jsonl my.jsonl  # Uses custom JSONL
+```
+
+**⚠️ Note**: Approach flags (like `--hybrid-cypher`) determine **which retriever to test**, not which file to use.
 
 ### 5. View Results
 - **Neo4j Browser**: http://localhost:7474 (explore the knowledge graph)
@@ -292,3 +305,11 @@ python tests/test_ragas_setup.py    # All approaches validation
 - [ ] Choose processing level: `python data_processors/graph_processor.py`
 - [ ] Validate setup: `python tests/test_ragas_setup.py`
 - [ ] Run benchmark: `python benchmark/ragas_benchmark.py --all`
+
+## Cheatsheet
+```
+python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --neo4j-vector --graphrag --advanced-graphrag  --limit 1 --jsonl benchmark/ragbench__nano_benchmark.jsonl
+```
+```
+python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --neo4j-vector --graphrag --advanced-graphrag  --limit 1
+```

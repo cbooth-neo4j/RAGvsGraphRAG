@@ -14,14 +14,6 @@ python benchmark/ragas_benchmark.py --chroma --graphrag
 # Use custom benchmark data
 python benchmark/ragas_benchmark.py --all --jsonl path/to/benchmark.jsonl
 ```
-
-## 📊 Evaluation Framework
-
-### **RAGAS Metrics**
-- **Context Recall**: How well retrieved context covers ground truth
-- **Faithfulness**: Whether response is grounded in retrieved context  
-- **Factual Correctness**: Accuracy of factual claims in response
-
 ### **Retrieval Approaches**
   --all                 Test all approaches
   --chroma              Include ChromaDB RAG in testing
@@ -31,6 +23,35 @@ python benchmark/ragas_benchmark.py --all --jsonl path/to/benchmark.jsonl
   --drift-graphrag      Include DRIFT GraphRAG (iterative refinement) in testing
   --neo4j-vector        Include Neo4j Vector RAG (pure vector similarity) in testing
   --hybrid-cypher       Include Hybrid Cypher RAG (hybrid + generic neighborhood) in testing
+
+## 📁 Benchmark File Selection
+
+The benchmark system uses the following **priority order** for selecting evaluation data:
+
+1. **`--jsonl path/to/file.jsonl`** → Uses specified JSONL file (highest priority)
+2. **`--csv path/to/file.csv`** → Uses specified CSV file  
+3. **No file specified** → Uses default `benchmark/benchmark.csv` (18 questions)
+
+### **Examples:**
+```bash
+# Uses default benchmark.csv (18 questions)
+python benchmark/ragas_benchmark.py --hybrid-cypher
+
+# Uses your custom JSONL file (10 questions from nano pipeline)
+python benchmark/ragas_benchmark.py --hybrid-cypher --jsonl benchmark/ragbench__nano_benchmark.jsonl
+
+# Uses custom CSV file
+python benchmark/ragas_benchmark.py --all --csv my_custom_benchmark.csv
+```
+
+**⚠️ Important**: The approach flags (like `--hybrid-cypher`) only determine **which retriever to test**, not which benchmark file to use. File selection is controlled by `--csv` and `--jsonl` arguments.
+
+## 📊 Evaluation Framework
+
+### **RAGAS Metrics**
+- **Context Recall**: How well retrieved context covers ground truth
+- **Faithfulness**: Whether response is grounded in retrieved context  
+- **Factual Correctness**: Accuracy of factual claims in response
 
 ## 🧪 RAGBench Integration
 

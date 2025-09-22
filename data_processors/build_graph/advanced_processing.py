@@ -44,7 +44,6 @@ class CommunityReport(BaseModel):
     title: str = Field(description="A descriptive title for this community")
     summary: str = Field(description="A comprehensive summary of the community's main themes and relationships")
     rating: float = Field(description="A numeric rating of the community's importance (0-10)")
-    rating_explanation: str = Field(description="Explanation of the importance rating")
 
 class AdvancedProcessingMixin:
     """Mixin providing advanced graph processing capabilities with configurable models"""
@@ -555,7 +554,7 @@ class AdvancedProcessingMixin:
                 
                 print(f"     Found {len(communities)} communities to summarize at level {level}")
                 
-                # Generate summaries in batches
+                # Generate summaries in batches with progress bar
                 level_summaries = self._generate_community_summaries_batch(communities, level)
                 total_summaries += level_summaries
                 
@@ -569,7 +568,12 @@ class AdvancedProcessingMixin:
         """Generate summaries for a batch of communities"""
         summaries_created = 0
         
-        for community in communities:
+        # Create progress bar for this level
+        progress_bar = tqdm(communities, desc=f"     Level {level} summaries", 
+                           unit="community", leave=False, 
+                           bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
+        
+        for community in progress_bar:
             try:
                 community_id = community['community_id']
                 entities = community['entities']
@@ -587,7 +591,6 @@ class AdvancedProcessingMixin:
                 1. A descriptive title (2-4 words)
                 2. A comprehensive summary (2-3 sentences)
                 3. An importance rating (0-10) based on entity relationships and diversity
-                4. A brief explanation of the importance rating
                 
                 Entities in this community:
                 {entity_context}
@@ -596,8 +599,7 @@ class AdvancedProcessingMixin:
                 {{
                     "title": "Community Title",
                     "summary": "Detailed summary of the community's main themes and relationships",
-                    "rating": 7.5,
-                    "rating_explanation": "Explanation of why this rating was assigned"
+                    "rating": 7.5
                 }}
                 """
                 
@@ -631,7 +633,6 @@ class AdvancedProcessingMixin:
                     SET c.title = $title,
                         c.summary = $summary,
                         c.rating = $rating,
-                        c.rating_explanation = $rating_explanation,
                         c.summarized_at = datetime()
                     """
                     
@@ -640,19 +641,23 @@ class AdvancedProcessingMixin:
                         community_id=community_id,
                         title=summary_data.get('title', f'Community {community_id}'),
                         summary=summary_data.get('summary', 'No summary available'),
-                        rating=float(summary_data.get('rating', 5.0)),
-                        rating_explanation=summary_data.get('rating_explanation', 'No explanation provided')
+                        rating=float(summary_data.get('rating', 5.0))
                     )
                     
                     summaries_created += 1
+                    # Update progress bar description with success count
+                    progress_bar.set_postfix({"✅": summaries_created})
                     
                 except json.JSONDecodeError:
-                    print(f"     ⚠️ Could not parse JSON response for community {community_id}")
+                    progress_bar.write(f"     ⚠️ Could not parse JSON response for community {community_id}")
                 except Exception as e:
-                    print(f"     ⚠️ Error generating summary for community {community_id}: {e}")
+                    progress_bar.write(f"     ⚠️ Error generating summary for community {community_id}: {e}")
                     
             except Exception as e:
-                print(f"     ⚠️ Error processing community: {e}")
+                progress_bar.write(f"     ⚠️ Error processing community: {e}")
+        
+        # Close progress bar
+        progress_bar.close()
         
         return summaries_created
     
@@ -757,7 +762,6 @@ class AdvancedProcessingMixin:
                         SET c.ai_summary = $summary,
                             c.title = $title,
                             c.importance_rating = $rating,
-                            c.rating_explanation = $rating_explanation,
                             c.summary_generated_at = datetime()
                         """
                         self.driver.execute_query(
@@ -765,8 +769,7 @@ class AdvancedProcessingMixin:
                             community_id=community_id,
                             summary=result['summary'],
                             title=result['title'],
-                            rating=result['rating'],
-                            rating_explanation=result['rating_explanation']
+                            rating=result['rating']
                         )
                         summaries_generated += 1
                 except Exception as e:
@@ -804,8 +807,7 @@ class AdvancedProcessingMixin:
             return {
                 "summary": result.summary,
                 "title": result.title,
-                "rating": result.rating,
-                "rating_explanation": result.rating_explanation
+                "rating": result.rating
             }
             
         except Exception as e:

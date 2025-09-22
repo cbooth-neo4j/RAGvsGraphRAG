@@ -11,7 +11,7 @@ NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
 NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
 
 FULLTEXT_INDEX = os.environ.get("NEO4J_FULLTEXT_INDEX", "chunk_text_fulltext")
-VECTOR_INDEX = os.environ.get("NEO4J_VECTOR_INDEX", "chunk_embedding")
+VECTOR_INDEX = os.environ.get("NEO4J_VECTOR_INDEX", "embedding")
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 out_path = os.path.join(os.getcwd(), "debug_out.txt")

@@ -17,7 +17,7 @@ import logging
 from config import get_model_config, get_embeddings, get_neo4j_llm, ModelProvider
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Comprehensive telemetry and logging suppression
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -46,16 +46,10 @@ class ChromaRetriever:
         self.embeddings = get_embeddings()
         
         # Use Neo4j GraphRAG LLM for OpenAI, regular LLM for Ollama
-        try:
-            if self.config.llm_provider == ModelProvider.OPENAI:
-                self.llm = get_neo4j_llm()
-            else:
-                # For Ollama, use regular LangChain LLM
-                from config import get_llm
-                self.llm = get_llm()
-        except Exception as e:
-            warnings.warn(f"Could not initialize configured LLM, falling back to default: {e}")
-            # Fallback to regular LLM
+        if self.config.llm_provider == ModelProvider.OPENAI:
+            self.llm = get_neo4j_llm()
+        else:
+            # For Ollama, use regular LangChain LLM
             from config import get_llm
             self.llm = get_llm()
         

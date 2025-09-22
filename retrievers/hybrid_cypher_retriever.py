@@ -18,7 +18,7 @@ import warnings
 from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Neo4j configuration
 NEO4J_URI = os.environ.get('NEO4J_URI')
@@ -26,7 +26,7 @@ NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 
 # Index names for entity-focused hybrid search (Local Entity HybridCypherRetriever)
-VECTOR_INDEX_NAME = "entity_embedding"  # Vector index on __Entity__.embedding
+VECTOR_INDEX_NAME = "embedding"  # Vector index on all nodes with embeddings
 FULLTEXT_INDEX_NAME = "entity_fulltext_idx"  # Full-text index on __Entity__.name, description
 
 class HybridCypherRAGRetriever:
@@ -50,12 +50,7 @@ class HybridCypherRAGRetriever:
             self.embeddings = get_neo4j_embeddings()
             self.llm = get_neo4j_llm()
         except Exception as e:
-            warnings.warn(f"Could not initialize configured models, falling back to defaults: {e}")
-            # Fallback imports for backward compatibility
-            from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
-            from neo4j_graphrag.llm import OpenAILLM
-            self.embeddings = OpenAIEmbeddings()
-            self.llm = OpenAILLM(model_name="gpt-4o-mini", model_params={"temperature": 0})
+            raise RuntimeError(f"Could not initialize configured models: {e}. Please check your .env configuration.")
         
         self.neo4j_uri = NEO4J_URI
         self.neo4j_user = NEO4J_USER

@@ -68,7 +68,7 @@ Communities:
 Select the most relevant communities (max {max_communities}).""")
         ])
         
-        self.llm = get_llm(temperature=0.1)
+        self.llm = get_llm()
     
     async def build_context(
         self, 

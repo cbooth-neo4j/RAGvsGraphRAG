@@ -13,9 +13,96 @@ import sys
 import os
 import argparse
 import asyncio
-from typing import List, Dict, Any
+import threading
+import queue
+from typing import List, Dict, Any, Optional
 import warnings
 warnings.filterwarnings("ignore")
+
+# Custom progress bar to replace RAGAS tqdm
+class CustomProgressBar:
+    def __init__(self, total, desc="Evaluating", unit="it"):
+        self.total = total
+        self.current = 0
+        self.desc = desc
+        self.unit = unit
+        self.start_time = time.time()
+        
+    def update(self, n=1):
+        self.current += n
+        elapsed = time.time() - self.start_time
+        if self.total > 0:
+            progress = (self.current / self.total) * 100
+            rate = self.current / elapsed if elapsed > 0 else 0
+            eta = (self.total - self.current) / rate if rate > 0 else 0
+            
+            # Format similar to tqdm but with actual progress
+            bar_length = 50
+            filled = int(bar_length * self.current / self.total)
+            bar = '█' * filled + '░' * (bar_length - filled)
+            
+            print(f"\r{self.desc}: {progress:3.0f}%|{bar}| {self.current}/{self.total} [{elapsed:02.0f}s<{eta:02.0f}s, {rate:.2f}{self.unit}/s]", end='', flush=True)
+    
+    def close(self):
+        print()  # New line when done
+        
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, *args):
+        self.close()
+
+def patch_ragas_progress():
+    """Monkey patch RAGAS to use our custom progress bar"""
+    try:
+        # Import tqdm and replace it
+        import tqdm
+        import ragas
+        
+        # Store original tqdm
+        original_tqdm = tqdm.tqdm
+        
+        class TqdmWrapper:
+            def __init__(self, *args, **kwargs):
+                total = kwargs.get('total', 0)
+                desc = kwargs.get('desc', 'Evaluating')
+                self.pbar = CustomProgressBar(total, desc)
+                
+            def update(self, n=1):
+                self.pbar.update(n)
+                
+            def close(self):
+                self.pbar.close()
+                
+            def __enter__(self):
+                return self
+                
+            def __exit__(self, *args):
+                self.close()
+        
+        # Replace tqdm in various places RAGAS might use it
+        tqdm.tqdm = TqdmWrapper
+        
+        # Also try to patch it in ragas modules
+        try:
+            import ragas.evaluation
+            if hasattr(ragas.evaluation, 'tqdm'):
+                ragas.evaluation.tqdm = TqdmWrapper
+        except:
+            pass
+            
+        try:
+            import ragas.metrics
+            if hasattr(ragas.metrics, 'tqdm'):
+                ragas.metrics.tqdm = TqdmWrapper
+        except:
+            pass
+            
+        return original_tqdm
+        
+    except Exception as e:
+        print(f"⚠️ Could not patch RAGAS progress bar: {e}")
+        return None
 
 # Import visualization module
 try:
@@ -85,14 +172,13 @@ try:
     print("✅ Model configuration imported successfully")
     model_config = get_model_config()
     print(f"🔧 LLM Provider: {model_config.llm_provider.value}")
-    print(f"🔧 LLM Model: {model_config.llm_model.value}")
+    print(f"🔧 LLM Model: {model_config.llm_model}")
     print(f"🔧 Embedding Provider: {model_config.embedding_provider.value}")
-    print(f"🔧 Embedding Model: {model_config.embedding_model.value}")
+    print(f"🔧 Embedding Model: {model_config.embedding_model}")
     
     # Initialize LLM and embeddings for RAGAS using centralized configuration
     SEED = model_config.seed or 42
     llm = get_llm(
-        temperature=model_config.temperature,
         seed=SEED,
         max_retries=0
     )
@@ -101,20 +187,7 @@ try:
     print("✅ RAGAS models initialized with centralized configuration")
     
 except ImportError as e:
-    print(f"⚠️  Could not import centralized model configuration: {e}")
-    print("   Falling back to OpenAI models for RAGAS evaluation")
-    
-    # Fallback to OpenAI models
-    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-    
-    SEED = 42
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",  # Use a more available model
-        temperature=0,
-        model_kwargs={"seed": SEED},
-        max_retries=0
-    )
-    embeddings = OpenAIEmbeddings()
+    raise ImportError(f"Could not import centralized model configuration: {e}. Please ensure your .env file is properly configured.")
 
 def load_benchmark_data(csv_path: str = "benchmark/benchmark.csv") -> List[Dict[str, str]]:
     """Load benchmark questions and ground truth answers from CSV"""
@@ -165,19 +238,88 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
         reference = item['ground_truth']
         
         print(f"  Processing question {i}/{len(benchmark_data)}: {query[:60]}...")
+        print(f"  🔍 DEBUG: Reference value: '{reference}' (length: {len(reference)})")
         
         try:
             # Query the appropriate RAG system using new retriever functions
             if approach == "chroma" and CHROMA_AVAILABLE:
                 result = query_chroma_rag(query, k=1)
             elif approach == "graphrag" and GRAPHRAG_AVAILABLE:
-                result = query_graphrag(query, k=5)
+                try:
+                    result = query_graphrag(query, k=5)
+                    # Ensure result has the expected structure
+                    if not result or not result.get('final_answer'):
+                        result = {
+                            'final_answer': 'GraphRAG retrieval failed to generate a response.',
+                            'retrieval_details': [],
+                            'method': 'graphrag_fallback'
+                        }
+                except Exception as e:
+                    print(f"   ⚠️ GraphRAG query failed: {e}")
+                    result = {
+                        'final_answer': f'GraphRAG error: {str(e)}',
+                        'retrieval_details': [],
+                        'method': 'graphrag_error'
+                    }
             elif approach == "text2cypher" and TEXT2CYPHER_AVAILABLE:
                 result = query_text2cypher_rag(query)
             elif approach == "advanced_graphrag" and ADVANCED_GRAPHRAG_AVAILABLE:
-                result = query_advanced_graphrag(query, mode="hybrid", k=5)
+                try:
+                    # Advanced GraphRAG uses async, so we need to handle it properly
+                    import asyncio
+                    loop = None
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    # Import and run the async function
+                    from retrievers.advanced_graphrag_retriever import query_advanced_graphrag_global
+                    result = loop.run_until_complete(query_advanced_graphrag_global(query, k=5))
+                    
+                    # Ensure result has the expected structure
+                    if not result or not result.get('final_answer'):
+                        result = {
+                            'final_answer': 'Advanced GraphRAG retrieval failed to generate a response.',
+                            'retrieval_details': [],
+                            'method': 'advanced_graphrag_fallback'
+                        }
+                except Exception as e:
+                    print(f"   ⚠️ Advanced GraphRAG query failed: {e}")
+                    result = {
+                        'final_answer': f'Advanced GraphRAG error: {str(e)}',
+                        'retrieval_details': [],
+                        'method': 'advanced_graphrag_error'
+                    }
             elif approach == "drift_graphrag" and DRIFT_GRAPHRAG_AVAILABLE:
-                result = query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True)
+                try:
+                    # DRIFT GraphRAG also uses async
+                    import asyncio
+                    loop = None
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    # Run the async function
+                    result = loop.run_until_complete(query_drift_graphrag(query, use_modular=True))
+                    
+                    # Ensure result has the expected structure
+                    if not result or not result.get('final_answer'):
+                        result = {
+                            'final_answer': 'DRIFT GraphRAG retrieval failed to generate a response.',
+                            'retrieval_details': [],
+                            'method': 'drift_graphrag_fallback'
+                        }
+                except Exception as e:
+                    print(f"   ⚠️ DRIFT GraphRAG query failed: {e}")
+                    result = {
+                        'final_answer': f'DRIFT GraphRAG error: {str(e)}',
+                        'retrieval_details': [],
+                        'method': 'drift_graphrag_error'
+                    }
             elif approach == "neo4j_vector" and NEO4J_VECTOR_AVAILABLE:
                 result = query_neo4j_vector_rag(query, k=5)
             elif approach == "hybrid_cypher" and HYBRID_CYPHER_AVAILABLE:
@@ -213,25 +355,29 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                     if neighbor_summaries:
                         content = f"Anchor: {str(anchor)[:200]} | Neighbors: " + ", ".join(map(str, neighbor_summaries[:20]))
                 if content:
-                    if len(content) > 1000:
-                        content = content[:1000] + "..."
+                    # Don't truncate contexts too aggressively - RAGAS needs sufficient context
+                    # for meaningful comparison with ground truth
+                    if len(content) > 2000:  # Increased from 1000 to 2000
+                        content = content[:2000] + "..."
                     retrieved_contexts.append(content)
             
-            # Ensure we have at least some context
+            # Ensure we have at least some context - but make it more meaningful
             if not retrieved_contexts:
-                retrieved_contexts = ["No relevant context retrieved"]
+                retrieved_contexts = ["No relevant context was retrieved for this query."]
             
             # Get the response
             response = result.get('final_answer', '')
+            if not response:
+                response = "No response generated."
             
-            # Create RAGAS-compatible data structure with field names expected by metrics
+            # Create RAGAS-compatible data structure with EXACT field names required by RAGAS
+            # Based on debug testing, RAGAS requires exactly: user_input, retrieved_contexts, response, reference
+            print(f"  🔍 DEBUG: About to add to dataset - reference: '{reference}' (length: {len(reference)})")
             dataset.append({
                 "user_input": query,
-                "question": query,  # Also include question for RAGBench compatibility
                 "retrieved_contexts": retrieved_contexts,
                 "response": response,
-                "reference": reference,
-                "ground_truth": reference  # Also include ground_truth for RAGBench compatibility
+                "reference": reference
             })
             
             # Small delay to avoid overwhelming the systems
@@ -239,24 +385,62 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             
         except Exception as e:
             print(f"    ❌ Error processing question {i}: {e}")
-            # Add a failure record to maintain dataset consistency
+            # Add a failure record to maintain dataset consistency with exact RAGAS format
             dataset.append({
                 "user_input": query,
-                "question": query,  # Also include question for RAGBench compatibility
                 "retrieved_contexts": ["Error: Could not retrieve context"],
                 "response": f"Error: {str(e)}",
-                "reference": reference,
-                "ground_truth": reference  # Also include ground_truth for RAGBench compatibility
+                "reference": reference
             })
     
     print(f"✅ Collected {len(dataset)} evaluation records for {approach.upper()}")
     return dataset
+
+def debug_dataset_format(dataset: List[Dict[str, Any]], approach_name: str):
+    """
+    Debug function to examine dataset format and content quality
+    """
+    print(f"\n🔍 Debugging dataset format for {approach_name}...")
+    
+    if not dataset:
+        print("   ⚠️  Dataset is empty!")
+        return
+    
+    sample = dataset[0]
+    print(f"   📋 Sample keys: {list(sample.keys())}")
+    
+    # Check contexts quality
+    contexts = sample.get('retrieved_contexts', [])
+    print(f"   📄 Number of contexts: {len(contexts)}")
+    if contexts:
+        print(f"   📄 First context length: {len(contexts[0])} chars")
+        print(f"   📄 First context preview: {contexts[0][:200]}...")
+    
+    # Check ground truth quality - check both possible field names
+    ground_truth = sample.get('ground_truth', '')
+    reference = sample.get('reference', '')
+    print(f"   🎯 Ground truth (ground_truth field) length: {len(ground_truth)} chars")
+    print(f"   🎯 Ground truth (reference field) length: {len(reference)} chars")
+    print(f"   🎯 Ground truth preview: {ground_truth[:200]}...")
+    print(f"   🎯 Reference preview: {reference[:200]}...")
+    
+    # Check response quality
+    response = sample.get('response', '')
+    print(f"   💬 Response length: {len(response)} chars")
+    print(f"   💬 Response preview: {response[:200]}...")
 
 def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str) -> Dict[str, float]:
     """
     Evaluate the dataset using RAGAS following the documentation pattern
     """
     print(f"\n📊 Evaluating {approach_name} using RAGAS metrics...")
+    print(f"   📋 Dataset size: {len(dataset)} items")
+    
+    # Debug the dataset format
+    debug_dataset_format(dataset, approach_name)
+    
+    # Patch RAGAS progress bar for incremental updates
+    original_tqdm = patch_ragas_progress()
     
     # Force sequential processing to prevent parallel job timeouts
     os.environ['RAGAS_MAX_WORKERS'] = '1'
@@ -292,12 +476,101 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         # LLM timeout configuration is handled by the model factory
         # If there are actual timeout issues, they will surface as runtime errors
         
-        # Use basic metrics
-        metrics = [
-            LLMContextRecall(),
-            Faithfulness(),
-            FactualCorrectness()
-        ]
+        # Use basic metrics with enhanced configuration for smaller models
+        # Configure metrics with explicit parameters to avoid issues
+        try:
+            context_recall_metric = LLMContextRecall()
+            faithfulness_metric = Faithfulness()
+            factual_correctness_metric = FactualCorrectness(mode="f1")
+            
+            metrics = [context_recall_metric, faithfulness_metric, factual_correctness_metric]
+        except Exception as e:
+            print(f"   ⚠️  Error configuring metrics: {e}")
+            # Fallback to simpler configuration
+            metrics = [LLMContextRecall(), Faithfulness(), FactualCorrectness()]
+        
+        # Configure metrics for smaller models
+        for metric in metrics:
+            if hasattr(metric, 'llm'):
+                # Set timeout and retry configurations
+                if hasattr(metric.llm, 'request_timeout'):
+                    metric.llm.request_timeout = 300
+                if hasattr(metric, '_max_retries'):
+                    metric._max_retries = 5
+        
+        # Enhanced error handling for smaller models
+        def safe_evaluate_metrics(dataset, metrics_list, llm_wrapper):
+            """Safely evaluate metrics with fallback handling for parser errors"""
+            results = {}
+            
+            for i, metric in enumerate(metrics_list):
+                metric_name = metric.__class__.__name__
+                print(f"   📊 Evaluating {metric_name} ({i+1}/{len(metrics_list)})...")
+                
+                try:
+                    # Single metric evaluation to isolate failures
+                    single_result = evaluate(
+                        dataset=dataset,
+                        metrics=[metric],
+                        llm=llm_wrapper,
+                        raise_exceptions=False
+                    )
+                    
+                    # Extract the score
+                    if hasattr(single_result, 'to_pandas'):
+                        df = single_result.to_pandas()
+                        if not df.empty:
+                            for col in df.columns:
+                                if col not in ['user_input', 'retrieved_contexts', 'response', 'reference']:
+                                    score = df[col].mean() if not df[col].isna().all() else 0.0
+                                    results[col] = score
+                                    print(f"     ✅ {metric_name}: {col} = {score:.3f}")
+                    
+                except Exception as e:
+                    print(f"     ❌ {metric_name} failed: {e}")
+                    print(f"     🔍 Error details: {type(e).__name__}: {str(e)}")
+                    
+                    # Try to provide a basic heuristic score for context recall
+                    if 'context_recall' in metric_name.lower():
+                        try:
+                            # Simple heuristic: check if any retrieved context contains keywords from ground truth
+                            heuristic_score = calculate_heuristic_context_recall(dataset)
+                            results['context_recall'] = heuristic_score
+                            print(f"     🔄 Using heuristic context recall: {heuristic_score:.3f}")
+                        except:
+                            results['context_recall'] = 0.0
+                    elif 'faithfulness' in metric_name.lower():
+                        results['faithfulness'] = 0.0
+                    elif 'factual' in metric_name.lower():
+                        results['factual_correctness'] = 0.0
+            
+            return results
+        
+        def calculate_heuristic_context_recall(dataset):
+            """Calculate a simple heuristic context recall score"""
+            if not dataset:
+                return 0.0
+                
+            total_score = 0.0
+            for item in dataset:
+                contexts = item.get('retrieved_contexts', [])
+                ground_truth = item.get('ground_truth', '')
+                
+                if not contexts or not ground_truth:
+                    continue
+                    
+                # Simple keyword overlap approach
+                gt_words = set(ground_truth.lower().split())
+                context_text = ' '.join(contexts).lower()
+                context_words = set(context_text.split())
+                
+                # Calculate overlap ratio
+                if gt_words:
+                    overlap = len(gt_words.intersection(context_words))
+                    score = overlap / len(gt_words)
+                    total_score += min(score, 1.0)  # Cap at 1.0
+            
+            return total_score / len(dataset) if dataset else 0.0
         
         # Run evaluation with retry logic
         max_retries = int(os.getenv('RAGAS_MAX_RETRIES', '3'))  # Increased from 2 to 3
@@ -338,28 +611,34 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                 os.environ['RAGAS_ASYNC_MAX_WORKERS'] = '1'
                 os.environ['RAGAS_DISABLE_PARALLEL'] = 'true'
                 
-                # Increase various timeout settings
-                os.environ['RAGAS_REQUEST_TIMEOUT'] = '600'  # 10 minutes
-                os.environ['RAGAS_ASYNC_TIMEOUT'] = '600'
-                os.environ['RAGAS_EVALUATION_TIMEOUT'] = '1200'  # 20 minutes for entire evaluation
+                # Increase various timeout settings - but make them more reasonable
+                os.environ['RAGAS_REQUEST_TIMEOUT'] = '180'  # 3 minutes per request
+                os.environ['RAGAS_ASYNC_TIMEOUT'] = '180'
+                os.environ['RAGAS_EVALUATION_TIMEOUT'] = '600'  # 10 minutes for entire evaluation
                 
                 # Additional environment variables that might help
-                os.environ['HTTPX_TIMEOUT'] = '600'  # For HTTP client timeouts
-                os.environ['OPENAI_REQUEST_TIMEOUT'] = '600'  # For OpenAI API calls
-                os.environ['OLLAMA_REQUEST_TIMEOUT'] = '600'  # For Ollama API calls
+                os.environ['HTTPX_TIMEOUT'] = '180'  # For HTTP client timeouts
+                os.environ['OPENAI_REQUEST_TIMEOUT'] = '180'  # For OpenAI API calls
+                os.environ['OLLAMA_REQUEST_TIMEOUT'] = '180'  # For Ollama API calls
+                
+                # Add batch processing settings to reduce timeouts
+                os.environ['RAGAS_BATCH_SIZE'] = '1'  # Process one item at a time
+                os.environ['RAGAS_CONCURRENT_LIMIT'] = '1'  # No concurrent processing
                 
                 try:
                     # Force sequential evaluation by evaluating one metric at a time
                     print(f"   🔄 Evaluating metrics sequentially to avoid timeouts...")
                     
                     individual_results = {}
+                    total_metrics = len(metrics)
+                    
+                    print(f"   🔄 Starting sequential evaluation of {total_metrics} metrics...")
                     
                     for i, metric in enumerate(metrics):
                         metric_name = type(metric).__name__
-                        print(f"   📊 Evaluating {metric_name} ({i+1}/{len(metrics)})...")
+                        print(f"   📊 Evaluating {metric_name} ({i+1}/{total_metrics})...")
                         
                         try:
-                            # Evaluate single metric with longer timeout
                             single_result = evaluate(
                                 dataset=evaluation_dataset,
                                 metrics=[metric],
@@ -373,13 +652,16 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                                 if not df.empty:
                                     for col in df.columns:
                                         if col.lower() not in ['user_input', 'retrieved_contexts', 'response', 'reference']:
-                                            individual_results[col] = df[col].mean()
-                                            print(f"     ✅ {metric_name}: {col} = {df[col].mean():.3f}")
+                                            score = df[col].mean()
+                                            individual_results[col] = score
+                                            print(f"     ✅ {metric_name}: {col} = {score:.3f}")
                             
                         except Exception as metric_error:
-                            print(f"     ❌ {metric_name} failed: {metric_error}")
+                            print(f"     ❌ {metric_name} failed: {str(metric_error)[:100]}...")
                             # Set default value for failed metric
                             individual_results[metric_name.lower()] = 0.0
+                    
+                    print(f"\n   ✅ Evaluation completed for {approach_name}")
                     
                     # Create a mock result object with individual results
                     class MockResult:
@@ -392,6 +674,11 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                     
                     result = MockResult(individual_results)
                 finally:
+                    # Restore original tqdm
+                    if original_tqdm:
+                        import tqdm
+                        tqdm.tqdm = original_tqdm
+                    
                     # Restore original settings
                     if original_workers is not None:
                         os.environ['RAGAS_MAX_WORKERS'] = original_workers
@@ -670,20 +957,25 @@ def save_results_simple(chroma_dataset: List, graphrag_dataset: List, text2cyphe
                        comparison_table: pd.DataFrame, output_dir: str = "benchmark_outputs"):
     """Save results to files in organized folder structure"""
     
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
+    # Create timestamped subdirectory
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamped_output_dir = os.path.join(output_dir, f"run_{timestamp}")
+    
+    # Create timestamped output directory if it doesn't exist
+    os.makedirs(timestamped_output_dir, exist_ok=True)
     
     # Save datasets
     chroma_df = pd.DataFrame(chroma_dataset)
     graphrag_df = pd.DataFrame(graphrag_dataset)
     text2cypher_df = pd.DataFrame(text2cypher_dataset)
     
-    chroma_df.to_csv(f'{output_dir}/simple_benchmark_chroma.csv', index=False)
-    graphrag_df.to_csv(f'{output_dir}/simple_benchmark_graphrag.csv', index=False)
-    text2cypher_df.to_csv(f'{output_dir}/simple_benchmark_text2cypher.csv', index=False)
+    chroma_df.to_csv(f'{timestamped_output_dir}/simple_benchmark_chroma.csv', index=False)
+    graphrag_df.to_csv(f'{timestamped_output_dir}/simple_benchmark_graphrag.csv', index=False)
+    text2cypher_df.to_csv(f'{timestamped_output_dir}/simple_benchmark_text2cypher.csv', index=False)
     
     # Save comparison table
-    comparison_table.to_csv(f'{output_dir}/simple_benchmark_three_way_comparison.csv', index=False)
+    comparison_table.to_csv(f'{timestamped_output_dir}/simple_benchmark_three_way_comparison.csv', index=False)
     
     # Save results
     chroma_avg = comparison_table['ChromaDB RAG'].mean()
@@ -694,7 +986,7 @@ def save_results_simple(chroma_dataset: List, graphrag_dataset: List, text2cyphe
     scores = {'ChromaDB RAG': chroma_avg, 'GraphRAG': graphrag_avg, 'Text2Cypher': text2cypher_avg}
     best_overall = max(scores, key=scores.get)
     
-    with open(f'{output_dir}/simple_benchmark_results.json', 'w') as f:
+    with open(f'{timestamped_output_dir}/simple_benchmark_results.json', 'w') as f:
         json.dump({
             'chroma_results': chroma_results,
             'graphrag_results': graphrag_results,
@@ -707,29 +999,35 @@ def save_results_simple(chroma_dataset: List, graphrag_dataset: List, text2cyphe
             }
         }, f, indent=2)
     
-    print(f"\n💾 Results saved to '{output_dir}/' folder:")
+    print(f"\n💾 Results saved to timestamped folder: '{timestamped_output_dir}/':")
     print("  - simple_benchmark_chroma.csv")
     print("  - simple_benchmark_graphrag.csv")
     print("  - simple_benchmark_text2cypher.csv") 
     print("  - simple_benchmark_three_way_comparison.csv")
     print("  - simple_benchmark_results.json")
+    return timestamped_output_dir
 
 def save_results_selective(datasets: Dict, results: Dict, comparison_table: pd.DataFrame, 
                           approaches: List[str], output_dir: str = "benchmark_outputs"):
     """Save results for selected approaches only"""
     
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
+    # Create timestamped subdirectory
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamped_output_dir = os.path.join(output_dir, f"run_{timestamp}")
+    
+    # Create timestamped output directory if it doesn't exist
+    os.makedirs(timestamped_output_dir, exist_ok=True)
     
     # Save datasets for selected approaches
     for approach in approaches:
         if approach in datasets and datasets[approach]:
             df = pd.DataFrame(datasets[approach])
-            df.to_csv(f'{output_dir}/simple_benchmark_{approach}.csv', index=False)
+            df.to_csv(f'{timestamped_output_dir}/simple_benchmark_{approach}.csv', index=False)
             print(f"  - simple_benchmark_{approach}.csv")
     
     # Save comparison table
-    comparison_table.to_csv(f'{output_dir}/simple_benchmark_comparison.csv', index=False)
+    comparison_table.to_csv(f'{timestamped_output_dir}/simple_benchmark_comparison.csv', index=False)
     print(f"  - simple_benchmark_comparison.csv")
     
     # Calculate averages for selected approaches
@@ -763,13 +1061,16 @@ def save_results_selective(datasets: Dict, results: Dict, comparison_table: pd.D
         if approach in results:
             results_data[f'{approach}_results'] = results[approach]
     
-    with open(f'{output_dir}/simple_benchmark_results.json', 'w') as f:
+    with open(f'{timestamped_output_dir}/simple_benchmark_results.json', 'w') as f:
         json.dump(results_data, f, indent=2)
     
     print(f"  - simple_benchmark_results.json")
     
     # Create detailed human-readable reports
-    create_detailed_reports(datasets, results, approaches, output_dir)
+    create_detailed_reports(datasets, results, approaches, timestamped_output_dir)
+    
+    print(f"\n💾 Results saved to timestamped folder: '{timestamped_output_dir}/'")
+    return timestamped_output_dir
 
 
 def create_detailed_reports(datasets: Dict, results: Dict, approaches: List[str], output_dir: str):
@@ -785,7 +1086,10 @@ def create_detailed_reports(datasets: Dict, results: Dict, approaches: List[str]
         if str(ragbench_path) not in sys.path:
             sys.path.append(str(ragbench_path))
         
-        from results_formatter import RAGBenchResultsFormatter
+        try:
+            from ragbench.results_formatter import RAGBenchResultsFormatter
+        except ImportError:
+            from .ragbench.results_formatter import RAGBenchResultsFormatter
         
         print(f"\n📄 Creating detailed human-readable reports...")
         
@@ -1113,11 +1417,11 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs",
     
     # Save detailed results
     print(f"\n💾 Phase 4: Saving Results")
-    save_results_selective(datasets, results, comparison_table, approaches, output_dir)
+    timestamped_dir = save_results_selective(datasets, results, comparison_table, approaches, output_dir)
     
     # Generate visualizations
     print(f"\n📊 Phase 5: Generating Visualizations")
-    create_visualizations(comparison_table)
+    create_visualizations(comparison_table, output_dir=timestamped_dir)
     
     print(f"\n✅ BENCHMARK COMPLETE!")
     print("=" * 80)

@@ -34,7 +34,7 @@ class DRIFTActionConfig:
     """Configuration for DRIFT actions"""
     max_follow_ups: int = 3
     min_score_threshold: float = 20.0
-    temperature: float = 0.1
+    # Removed temperature - let models use their defaults
     auto_route: bool = True  # Use existing QueryClassifier
     default_search_type: str = "local"  # local, global, or hybrid
 

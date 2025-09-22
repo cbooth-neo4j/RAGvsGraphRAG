@@ -28,7 +28,7 @@ class DRIFTConfig:
     n_depth: int = 3                           # Maximum search depth
     max_follow_ups: int = 3                    # Max follow-ups per iteration
     max_concurrent: int = 3                    # Max concurrent LLM calls
-    temperature: float = 0.1                   # LLM temperature
+    # Removed temperature - let models use their defaults
     min_relevance_score: float = 20.0          # Minimum score for including results
     enable_primer: bool = True                 # Enable primer phase
     enable_reduce: bool = True                 # Enable reduction phase
@@ -131,8 +131,8 @@ class DRIFTSearch:
         self.graph_processor = graph_processor
         self.config = config or DRIFTConfig()
         
-        # Initialize LLM first (needed by retrievers)
-        self.llm = get_llm(temperature=self.config.temperature)
+        # Initialize LLM first (needed by retrievers) - let model use default temperature
+        self.llm = get_llm()
         
         # Initialize components with error handling
         try:

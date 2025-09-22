@@ -13,7 +13,7 @@ import shutil
 # Disable Chroma telemetry
 chromadb.Client(Settings(anonymized_telemetry=False))
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Configure Chroma
 PERSIST_DIRECTORY = "chroma_db"

@@ -23,19 +23,14 @@ NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 
-# Initialize components with centralized configuration
-SEED = 42
-embeddings = get_neo4j_embeddings()
-
-# Use centralized LLM configuration for Cypher query generation
-text2cypher_llm = get_neo4j_llm()
+# Models are initialized per-instance, not at module level
 
 class Text2CypherRAGRetriever:
     """Text2Cypher retriever with natural language to Cypher conversion"""
     
     def __init__(self):
-        self.embeddings = embeddings
-        self.llm = text2cypher_llm
+        self.embeddings = get_neo4j_embeddings()
+        self.llm = get_neo4j_llm()
         self.neo4j_uri = NEO4J_URI
         self.neo4j_user = NEO4J_USER
         self.neo4j_password = NEO4J_PASSWORD
