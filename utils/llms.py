@@ -2,59 +2,92 @@ import datetime
 import logging
 import sys
 from typing import Sequence, Type, List
+import warnings
 
 import yaml
 from dotenv import load_dotenv
 import os,subprocess
 
-from langchain_google_vertexai.chat_models import ChatVertexAI
-from langchain_google_vertexai.embeddings import VertexAIEmbeddings
-from langchain_core.utils.json_schema import dereference_refs
-
-import google
-from google.genai.types import ThinkingConfig, HttpOptions
-from google.genai import types
-from google.auth.transport import Request
-from google.oauth2.credentials import Credentials
-from google.cloud.aiplatform_v1.services.prediction_service import PredictionServiceClient
-from google.cloud.aiplatform_v1.services.prediction_service.transports import PredictionServiceRestTransport
-
 from pydantic import BaseModel
 
-from genai_common.core.init_vertexai import init_vertexai
+# Optional VertexAI imports - only needed if using VertexAI provider
+try:
+    from langchain_google_vertexai.chat_models import ChatVertexAI
+    from langchain_google_vertexai.embeddings import VertexAIEmbeddings
+    try:
+        from langchain_core.utils.json_schema import dereference_refs
+    except ImportError:
+        dereference_refs = None
 
-from genai_common.proxy_token_roller import helix_proxy_token_roller, coin_proxy_token_roller
-from genai_common.config.environment import R2D2Environment, VertexAIEnvironment
+    import google
+    from google.genai.types import ThinkingConfig, HttpOptions
+    from google.genai import types
+    from google.auth.transport import Request
+    from google.oauth2.credentials import Credentials
+    from google.cloud.aiplatform_v1.services.prediction_service import PredictionServiceClient
+    from google.cloud.aiplatform_v1.services.prediction_service.transports import PredictionServiceRestTransport
+
+    from genai_common.core.init_vertexai import init_vertexai
+
+    from genai_common.proxy_token_roller import helix_proxy_token_roller, coin_proxy_token_roller
+    from genai_common.config.environment import R2D2Environment, VertexAIEnvironment
+    
+    VERTEXAI_AVAILABLE = True
+except ImportError as e:
+    VERTEXAI_AVAILABLE = False
+    warnings.warn(f"VertexAI dependencies not available in utils.llms: {e}. VertexAI functionality will not work.")
+    # Create stub objects so the module can still be imported
+    ChatVertexAI = None
+    VertexAIEmbeddings = None
+    dereference_refs = None
+    R2D2Environment = None
+    VertexAIEnvironment = None
+    coin_proxy_token_roller = None
+    vertex_env = None
+    token_roller = None
+    r2d2 = None
+    Request = None
+    Credentials = None
+    ThinkingConfig = None
+    HttpOptions = None
 
 
 load_dotenv()
-os.environ['SSL_CERT_FILE'] = os.getenv('R2D2_CERT_PATH')
+if VERTEXAI_AVAILABLE:
+    cert_path = os.getenv('R2D2_CERT_PATH')
+    if cert_path:
+        os.environ['SSL_CERT_FILE'] = cert_path
+else:
+    # Remove SSL_CERT_FILE if it exists and VertexAI is not available
+    # This prevents SSL issues with OpenAI/Ollama clients
+    os.environ.pop('SSL_CERT_FILE', None)
+    
 from utils.graph_rag_logger import  setup_logging, get_logger
 
 setup_logging()
 logger = get_logger(__name__)
 
-# Load LLM
+# Load LLM - only if VertexAI is available
+if VERTEXAI_AVAILABLE:
+    #token_roller = helix_proxy_token_roller()
 
-#token_roller = helix_proxy_token_roller()
+    r2d2 = R2D2Environment()
+    print(r2d2)
+    vertex_env = VertexAIEnvironment()
+    coin_credentials = yaml.safe_load(r2d2.coin_consumer_credentials_path.read_text())
 
-r2d2 = R2D2Environment()
-print(r2d2)
-vertex_env = VertexAIEnvironment()
-coin_credentials = yaml.safe_load(r2d2.coin_consumer_credentials_path.read_text())
+    token_roller = coin_proxy_token_roller(
+        url=r2d2.coin_consumer_endpoint_url,
+        client_id=coin_credentials["client_id"],
+        client_secret=coin_credentials["client_secret"],
+        scope=r2d2.coin_consumer_scope,
+        # ssl_cert_file= './certs/cacerts.pem' #r2d2.ssl_cert_file,
+    )
 
-token_roller = coin_proxy_token_roller(
-    url=r2d2.coin_consumer_endpoint_url,
-    client_id=coin_credentials["client_id"],
-    client_secret=coin_credentials["client_secret"],
-    scope=r2d2.coin_consumer_scope,
-    # ssl_cert_file= './certs/cacerts.pem' #r2d2.ssl_cert_file,
-)
-
-
-
-print('Loaded all modules in utils.llm', flush=True)
-logger.debug('Loaded all modules in utils.llm...')
+    print('Loaded all modules in utils.llm', flush=True)
+    logger.debug('Loaded all modules in utils.llm...')
+else:
+    logger.info('VertexAI not available, skipping VertexAI-specific initialization')
 
 def  get_coin_token():
 

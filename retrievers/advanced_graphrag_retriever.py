@@ -170,7 +170,7 @@ class Neo4jVectorStore:
                 index_names = [idx.get('name', '') for idx in result]
                 logger.debug(f"In Neo4JVectorStore with indexes: {index_names}")
                 
-                if 'entity_embeddings' not in index_names:
+                if 'entity_embedding' not in index_names:
                     # Check if we have entities with embeddings
                     count_result = session.run("""
                         MATCH (e:__Entity__) 
@@ -180,7 +180,7 @@ class Neo4jVectorStore:
                     
                     if count_result and count_result['count'] > 0:
                         session.run(f"""
-                            CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS 
+                            CREATE VECTOR INDEX entity_embedding IF NOT EXISTS 
                             FOR (e:__Entity__) ON e.embedding
                             OPTIONS {{
                                 indexConfig: {{
@@ -189,7 +189,7 @@ class Neo4jVectorStore:
                                 }}
                             }}
                         """)
-                        logger.info("Created entity_embeddings vector index")
+                        logger.info("Created entity_embedding vector index")
                     else:
                         logger.warning("No entities with embeddings found, skipping vector index creation")
         except Exception as e:
@@ -212,7 +212,7 @@ class Neo4jVectorStore:
                 query_embedding = self.embedding_model.embed_query(query)
                 logger.debug(f"Query embedding length: { len(query_embedding) }")
                 result = session.run("""
-                    CALL db.index.vector.queryNodes('entity_embeddings', $k, $query_embedding)
+                    CALL db.index.vector.queryNodes('entity_embedding', $k, $query_embedding)
                     YIELD node, score
                     RETURN node.id as id,
                            node.name as title,
@@ -2038,7 +2038,7 @@ class LightweightAdvancedGraphRAGRetriever:
         neo4j_uri = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
         neo4j_user = os.getenv('NEO4J_USER', 'neo4j')
         neo4j_password = os.getenv('NEO4J_PASSWORD', 'password')
-        neo4j_db = os.getenv('CLIENT_NEO4J_DATABASE', 'db')
+        neo4j_db = os.getenv('CLIENT_NEO4J_DATABASE', 'neo4j')
 
         self.driver = neo4j.GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password), database=neo4j_db)
         self.embeddings = get_embeddings()

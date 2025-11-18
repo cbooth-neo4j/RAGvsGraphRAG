@@ -11,19 +11,32 @@ import os
 
 # LangChain imports
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
-from utils.graph_rag_logger import setup_logging, get_logger
-from utils.llms import get_vertex_llm, get_new_token, vertex_env, token_roller, get_vertex_embeddings
+# Optional VertexAI imports
+try:
+    from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
+    from genai_common.core.init_vertexai import init_vertexai
+    from google.oauth2.credentials import Credentials
+    from utils.custom_neo4j_embeddings import CustomVertexAIEmbeddings
+    from utils.llms import get_vertex_llm, get_new_token, vertex_env, token_roller, get_vertex_embeddings
+    VERTEXAI_AVAILABLE = True
+except ImportError:
+    VERTEXAI_AVAILABLE = False
+    ChatVertexAI = None
+    VertexAIEmbeddings = None
+    warnings.warn("VertexAI dependencies not available. VertexAI provider will not work.")
 
-from genai_common.core.init_vertexai import init_vertexai
-from google.oauth2.credentials import Credentials
-from utils.custom_neo4j_embeddings import CustomVertexAIEmbeddings
+from utils.graph_rag_logger import setup_logging, get_logger
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Remove SSL_CERT_FILE if VertexAI is not being used
+# This prevents SSL issues with OpenAI/Ollama clients when VertexAI deps aren't available
+if not VERTEXAI_AVAILABLE:
+    os.environ.pop('SSL_CERT_FILE', None)
 
 setup_logging()
 logger = get_logger(__name__)
@@ -62,6 +75,8 @@ class LLMFactory:
         model_params.update(kwargs)
         
         if config.llm_provider == ModelProvider.OPENAI:
+            # Ensure SSL_CERT_FILE is not set for OpenAI to avoid SSL issues
+            os.environ.pop('SSL_CERT_FILE', None)
             return ChatOpenAI(
                 model=config.llm_model.value,
                 openai_api_key=config.openai_api_key,
@@ -87,6 +102,8 @@ class LLMFactory:
             }
             return ChatOllama(**ollama_params)
         elif config.llm_provider == ModelProvider.VERTEXAI:
+            if not VERTEXAI_AVAILABLE:
+                raise ImportError("VertexAI dependencies not installed. Install with: pip install langchain-google-vertexai")
             logger.debug("In create_llm, returning VertexAI llm..")
             return get_vertex_llm()
 
@@ -105,8 +122,6 @@ class LLMFactory:
         Returns:
             Neo4j GraphRAG LLM instance
         """
-        from utils.neo4j_vertexai_llm_updated import CustomVertexAILLM
-        from neo4j_graphrag.llm.vertexai_llm import VertexAILLM
         logger.debug(f"Model Config Object: {config}")
 
         if not NEO4J_GRAPHRAG_AVAILABLE:
@@ -131,10 +146,13 @@ class LLMFactory:
             warnings.warn("Using LangChain ChatOllama instead of Neo4j GraphRAG LLM for Ollama")
             return LLMFactory.create_llm(config, **kwargs)
         elif config.llm_provider == ModelProvider.VERTEXAI:
+            if not VERTEXAI_AVAILABLE:
+                raise ImportError("VertexAI dependencies not installed. Install with: pip install langchain-google-vertexai")
             credentials = Credentials(token=None, refresh_handler=get_new_token)
             init_vertexai(vertex_env, token_roller)
             model_params = config.get_model_params()
             model_params.update(kwargs)
+            from utils.neo4j_vertexai_llm_updated import CustomVertexAILLM
             return CustomVertexAILLM(
                 model=config.llm_model.value,
                 credentials=credentials,
@@ -181,6 +199,8 @@ class EmbeddingFactory:
             }
             return OllamaEmbeddings(**ollama_params)
         elif config.embedding_provider == ModelProvider.VERTEXAI:
+            if not VERTEXAI_AVAILABLE:
+                raise ImportError("VertexAI dependencies not installed. Install with: pip install langchain-google-vertexai")
             model = get_vertex_embeddings()
             return model
         else:
@@ -215,6 +235,8 @@ class EmbeddingFactory:
             warnings.warn("Using LangChain OllamaEmbeddings instead of Neo4j GraphRAG embeddings for Ollama")
             return EmbeddingFactory.create_embeddings(config, **kwargs)
         elif config.embedding_provider == ModelProvider.VERTEXAI:
+            if not VERTEXAI_AVAILABLE:
+                raise ImportError("VertexAI dependencies not installed. Install with: pip install langchain-google-vertexai")
             return CustomVertexAIEmbeddings(model_nm=config.embedding_model.value,)
         else:
             raise ValueError(f"Unsupported embedding provider: {config.embedding_provider}")

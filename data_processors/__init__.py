@@ -27,9 +27,9 @@ try:
     def process_pdf_directory(pdf_directory: str, output_directory: str = "processed_docs"):
         return process_pdfs(pdf_directory, "rfp_docs")
     
-    print("✅ PDF processor imported successfully")
+    print("PDF processor imported successfully")
 except ImportError as e:
-    print(f"⚠️ PDF processor not available: {e}")
+    print(f"WARNING: PDF processor not available: {e}")
     CHROMA_PROCESSOR_AVAILABLE = False
     PDFProcessor = None
     process_pdf_directory = None
@@ -55,17 +55,17 @@ try:
         finally:
             processor.close()
     
-    print("✅ Enhanced graph processor imported successfully (build_graph with advanced features)")
+    print("Enhanced graph processor imported successfully (build_graph with advanced features)")
 except ImportError as e:
-    print(f"⚠️ Enhanced graph processor not available: {e}")
+    print(f"WARNING: Enhanced graph processor not available: {e}")
     try:
         # Fallback to old processor
         from .graph_processor import CustomGraphProcessor
         from .graph_processor import GraphProcessor
         BASIC_GRAPH_PROCESSOR_AVAILABLE = True
-        print("✅ Fallback: Legacy graph processor imported successfully")
+        print("Fallback: Legacy graph processor imported successfully")
     except ImportError as e2:
-        print(f"⚠️ No graph processors available: {e2}")
+        print(f"WARNING: No graph processors available: {e2}")
         BASIC_GRAPH_PROCESSOR_AVAILABLE = False
         GraphProcessor = None
         CustomGraphProcessor = None
@@ -221,25 +221,25 @@ def test_all_processors():
     print("=" * 60)
     
     for processor_type, info in available.items():
-        print(f"\n🧪 Testing {info['name']}...")
+        print(f"\nTesting {info['name']}...")
         try:
             if processor_type == 'chroma_processor':
                 processor = create_chroma_processor()
                 results[processor_type] = {'status': 'available', 'class': type(processor).__name__}
-                print(f"✅ {info['name']}: Available")
+                print(f"OK {info['name']}: Available")
             elif processor_type == 'basic_graph_processor':
                 processor = create_basic_graph_processor()
                 results[processor_type] = {'status': 'available', 'class': type(processor).__name__}
-                print(f"✅ {info['name']}: Available")
+                print(f"OK {info['name']}: Available")
             # advanced_graph_processor is deprecated - integrated into basic_graph_processor
         except Exception as e:
-            print(f"❌ {info['name']}: Failed - {e}")
+            print(f"FAILED {info['name']}: Failed - {e}")
             results[processor_type] = {'status': 'error', 'error': str(e)}
     
     print("\n" + "=" * 60)
     successful = len([r for r in results.values() if r.get('status') == 'available'])
     total = len(results)
-    print(f"✅ Testing completed. {successful}/{total} processors available.")
+    print(f"Testing completed. {successful}/{total} processors available.")
     
     return results
 
@@ -277,4 +277,4 @@ if CHROMA_PROCESSOR_AVAILABLE:
 if BASIC_GRAPH_PROCESSOR_AVAILABLE:
     __all__.extend(['create_graph_from_chunks', 'CustomGraphProcessor'])
 
-print(f"🔗 Data processors module loaded. Available processors: {list(get_available_processors().keys())}") 
+print(f"Data processors module loaded. Available processors: {list(get_available_processors().keys())}") 

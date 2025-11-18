@@ -30,7 +30,7 @@ NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 NEO4J_DB = os.environ.get('CLIENT_NEO4J_DATABASE')
 
-INDEX_NAME = "chunk_embeddings" #sd43372 - made plural
+INDEX_NAME = "chunk_embedding"
 
 # Initialize embeddings and LLM using centralized configuration
 SEED = 42

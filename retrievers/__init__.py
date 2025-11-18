@@ -169,21 +169,21 @@ def test_all_retrievers(test_query: str = "What are the main requirements mentio
     print("=" * 60)
     
     for approach, info in available.items():
-        print(f"\n🧪 Testing {info['name']}...")
+        print(f"\nTesting {info['name']}...")
         try:
             result = query_retriever(approach, test_query)
             results[approach] = result
-            print(f"✅ {info['name']}: Success")
+            print(f"OK {info['name']}: Success")
             print(f"   Method: {result.get('method', 'Unknown')}")
             print(f"   Retrieved: {result.get('performance_metrics', {}).get('retrieved_chunks', 'Unknown')} items")
             answer_preview = result.get('final_answer', '')[:100] + "..." if len(result.get('final_answer', '')) > 100 else result.get('final_answer', '')
             print(f"   Answer: {answer_preview}")
         except Exception as e:
-            print(f"❌ {info['name']}: Failed - {e}")
+            print(f"FAILED {info['name']}: Failed - {e}")
             results[approach] = {'error': str(e)}
     
     print("\n" + "=" * 60)
-    print(f"✅ Testing completed. {len([r for r in results.values() if 'error' not in r])} successful, {len([r for r in results.values() if 'error' in r])} failed.")
+    print(f"Testing completed. {len([r for r in results.values() if 'error' not in r])} successful, {len([r for r in results.values() if 'error' in r])} failed.")
     
     return results
 
@@ -229,4 +229,4 @@ if ADVANCED_GRAPHRAG_AVAILABLE:
 if DRIFT_GRAPHRAG_AVAILABLE:
     __all__.extend(['create_drift_retriever', 'DriftGraphRAGRetriever'])
 
-print(f"🔗 Retrievers module loaded. Available approaches: {list(get_available_retrievers().keys())}") 
+print(f"Retrievers module loaded. Available approaches: {list(get_available_retrievers().keys())}") 
