@@ -71,7 +71,7 @@ class HybridCypherRAGRetriever:
         # This performs hybrid search on entities, then expands context via graph traversal
         self.retrieval_query = """
         // Hybrid search on entities (vector + fulltext)
-        CALL {
+        CALL () {
             // Vector search on entity embeddings
             CALL db.index.vector.queryNodes($vector_index_name, $top_k, $query_vector) 
             YIELD node AS vector_node, score AS vector_score

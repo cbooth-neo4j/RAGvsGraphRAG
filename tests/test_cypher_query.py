@@ -32,8 +32,7 @@ def test_cypher_query_structure():
     UNWIND $chunk_data AS chunk_item
     MATCH (chunk:Chunk {id: chunk_item.chunk_id})-[:PART_OF]->(d:Document)
     
-    CALL {
-        WITH chunk
+    CALL (chunk) {
         MATCH (chunk)-[:HAS_ENTITY]->(e)
         MATCH path=(e)(()-[rels:!HAS_ENTITY&!PART_OF]-()){0,2}(:!Chunk&!Document)
         
@@ -158,8 +157,7 @@ def test_simplified_cypher_execution():
             UNWIND $chunk_data AS chunk_item
             MATCH (chunk:Chunk {id: chunk_item.chunk_id})-[:PART_OF]->(d:Document)
             
-            CALL {
-                WITH chunk
+            CALL (chunk) {
                 MATCH (chunk)-[:HAS_ENTITY]->(e)
                 MATCH path=(e)(()-[rels:!HAS_ENTITY&!PART_OF]-()){0,2}(:!Chunk&!Document)
                 
