@@ -33,7 +33,19 @@ load_dotenv()
 # Configuration
 # Configuration is now handled by centralized config system
 
-logger = logging.getLogger(__name__)
+from utils.graph_rag_logger import setup_logging, get_logger
+
+
+setup_logging()
+logger = get_logger(__name__)
+
+# os.environ['SSL_CERT_FILE'] = 'C:\\llm-graph-builder-main-v1\\backend\\src\\CitiInternalCAChain_PROD.pem'
+# tiktoken_cache_dir = "C:\\llm-graph-builder-main-v1\\backend\\src\\tiktoken_cache"  # note the paths here...\\
+
+os.environ['SSL_CERT_FILE'] = '/var/app/anaconda/projects/sd43372/RAGvsGraphRAG-main-V2/CitiInternalCAChain_PROD.pem'
+tiktoken_cache_dir = '/var/app/anaconda/projects/sd43372/RAGvsGraphRAG-main-V2/tiktoken_cache/'
+os.environ["TIKTOKEN_CACHE_DIR"] = tiktoken_cache_dir
+
 
 # Advanced Data Models
 @dataclass
@@ -72,7 +84,7 @@ class Community:
     title: str
     level: int
     rank: Optional[float] = None
-    rank_explanation: Optional[str] = None
+    rating_explanation: Optional[str] = None
     full_content: Optional[str] = None
     summary: Optional[str] = None
     weight: Optional[float] = None
@@ -86,7 +98,7 @@ class CommunityReport:
     level: int
     rank: Optional[float] = None
     title: Optional[str] = None
-    rank_explanation: Optional[str] = None
+    rating_explanation: Optional[str] = None
     summary: Optional[str] = None
     findings: Optional[List[str]] = None
     full_content_json: Optional[str] = None
@@ -147,14 +159,18 @@ class Neo4jVectorStore:
         self._setup_vector_index()
     
     def _setup_vector_index(self):
-        """Create vector index for entities if it doesn't exist."""        
+        """Create vector index for entities if it doesn't exist."""
+        embed_dim = 768 if os.getenv('EMBEDDING_DIMENSION') is None else int(os.getenv('EMBEDDING_DIMENSION'))
+        logger.debug(f'_setup_vector_index...Embed dim is {embed_dim}')
+
         try:
             with self.driver.session() as session:
                 # First check if index exists
                 result = session.run("SHOW INDEXES").data()
                 index_names = [idx.get('name', '') for idx in result]
+                logger.debug(f"In Neo4JVectorStore with indexes: {index_names}")
                 
-                if 'embedding' not in index_names:
+                if 'entity_embeddings' not in index_names:
                     # Check if we have entities with embeddings
                     count_result = session.run("""
                         MATCH (e:__Entity__) 
@@ -163,15 +179,17 @@ class Neo4jVectorStore:
                     """).single()
                     
                     if count_result and count_result['count'] > 0:
-                        session.run("""
-                            CREATE VECTOR INDEX embedding IF NOT EXISTS 
-                            FOR (n:__Entity__|Document|Chunk) ON n.embedding
-                            OPTIONS {indexConfig: {
-                                `vector.dimensions`: 1536,
+                        session.run(f"""
+                            CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS 
+                            FOR (e:__Entity__) ON e.embedding
+                            OPTIONS {{
+                                indexConfig: {{
+                                `vector.dimensions`: {embed_dim},
                                 `vector.similarity_function`: 'cosine'
+                                }}
                             }}
                         """)
-                        logger.info("Created embedding vector index")
+                        logger.info("Created entity_embeddings vector index")
                     else:
                         logger.warning("No entities with embeddings found, skipping vector index creation")
         except Exception as e:
@@ -190,9 +208,11 @@ class Neo4jVectorStore:
         with self.driver.session() as session:
             # First try vector search if index exists
             try:
+                logger.debug(f"In coming query: {query}")
                 query_embedding = self.embedding_model.embed_query(query)
+                logger.debug(f"Query embedding length: { len(query_embedding) }")
                 result = session.run("""
-                    CALL db.index.vector.queryNodes('embedding', $k, $query_embedding)
+                    CALL db.index.vector.queryNodes('entity_embeddings', $k, $query_embedding)
                     YIELD node, score
                     RETURN node.id as id,
                            node.name as title,
@@ -222,17 +242,19 @@ class Neo4jVectorStore:
                         rank=record["rank"]
                     )
                     entities_with_scores.append((entity, record["score"]))
-                
+                logger.debug(f"Returning top nodes and their similarity scores:\n\n {entities_with_scores[:k]}")
                 return entities_with_scores[:k]
                 
             except Exception as e:
-                logger.warning(f"Vector search failed, falling back to text matching: {e}")
+                logger.error(f"Vector search failed, falling back to text matching: {e}")
                 # Fallback to text-based matching
                 return self._fallback_text_search(query, k, session)
     
     def _fallback_text_search(self, query: str, k: int, session) -> List[Tuple[Entity, float]]:
         """Fallback text-based entity search when vector index is not available."""
         # Simple text matching based on entity names and descriptions
+        logger.info("Falling back to text search as vector index based search failed or vector index is not available...")
+        logger.debug(f"Incoming query: {query} in _fallback_text_search")
         query_lower = query.lower()
         query_tokens = query_lower.split()
         
@@ -467,7 +489,7 @@ class Neo4jDataLoader:
                         rank=record['rank']
                     )
                     entities[entity.id] = entity
-        
+        logger.info(f'Loaded {len(entities)}')
         return entities
     
     def load_relationships(self) -> Dict[str, Relationship]:
@@ -502,7 +524,7 @@ class Neo4jDataLoader:
                     rank=record['rank']
                 )
                 relationships[rel_id] = relationship
-        
+        logger.info(f'Loaded {len(relationships)} relationships')
         return relationships
     
     def load_text_units(self) -> Dict[str, TextUnit]:
@@ -534,7 +556,7 @@ class Neo4jDataLoader:
                         n_tokens=record['n_tokens']
                     )
                     text_units[text_unit.id] = text_unit
-        
+        logger.info(f'Loaded {len(text_units)} text_units')
         return text_units
     
     def load_communities(self) -> List[Community]:
@@ -548,7 +570,7 @@ class Neo4jDataLoader:
                        coalesce(c.title, c.id) as title,
                        c.level as level,
                        c.community_rank as rank,
-                       c.rank_explanation as rank_explanation,
+                       c.rating_explanation as rating_explanation,
                        c.summary as summary,
                        coalesce(c.weight, 1.0) as weight
                 ORDER BY c.level, c.community_rank DESC
@@ -560,18 +582,18 @@ class Neo4jDataLoader:
                     title=record['title'],
                     level=record['level'] or 0,
                     rank=record['rank'],
-                    rank_explanation=record['rank_explanation'],
+                    rating_explanation=record['rating_explanation'],
                     summary=record['summary'],
                     weight=record['weight']
                 )
                 communities.append(community)
-        
+        logger.info(f'Loaded {len(communities)} communities')
         return communities
     
     def load_community_reports(self) -> List[CommunityReport]:
         """Load community reports from Neo4j __Community__ nodes."""
         reports = []
-        
+        logger.debug(f'Loading Community Report')
         with self.driver.session() as session:
             result = session.run("""
                 MATCH (c:__Community__)
@@ -581,7 +603,7 @@ class Neo4jDataLoader:
                        c.level as level,
                        c.community_rank as rank,
                        coalesce(c.title, c.id) as title,
-                       c.rank_explanation as rank_explanation,
+                       c.rating_explanation as rating_explanation,
                        c.summary as summary
                 ORDER BY c.level, c.community_rank DESC
             """).data()
@@ -593,11 +615,11 @@ class Neo4jDataLoader:
                     level=record['level'] or 0,
                     rank=record['rank'],
                     title=record['title'],
-                    rank_explanation=record['rank_explanation'],
+                    rating_explanation=record['rating_explanation'],
                     summary=record['summary']
                 )
                 reports.append(report)
-        
+        logger.info(f'Loaded {len(reports)} community reports.')
         return reports
 
 
@@ -1007,7 +1029,7 @@ class LocalSearchMixedContext(LocalContextBuilder):
                     level=report.level,
                     rank=report.rank,
                     title=report.title,
-                    rank_explanation=report.rank_explanation,
+                    rating_explanation=report.rating_explanation,
                     summary=report.summary,
                     attributes={"matches": match_count}
                 )
@@ -1255,6 +1277,8 @@ class LocalSearch:
                 context_data=context_result.context_chunks,
                 response_type=self.response_type,
             )
+
+            logger.debug(f'Local search prompt: {search_prompt}')
             
             # Generate response  
             from langchain_core.messages import SystemMessage, HumanMessage
@@ -1264,7 +1288,12 @@ class LocalSearch:
                 HumanMessage(content=query)
             ]
             
-            response = await self.model.ainvoke(
+            # response = await self.model.ainvoke(
+            #     messages,
+            #     **self.model_params,
+            # )
+
+            response =  self.model.invoke(
                 messages,
                 **self.model_params,
             )
@@ -1336,7 +1365,7 @@ Each key point should be:
 - Supported by the community report data
 - Include a relevance score from 0-100 (100 being most relevant)
 
-IMPORTANT: You MUST return your response as a valid JSON object with this exact structure:
+Return your response as a JSON object with this structure:
 {{
     "points": [
         {{
@@ -1349,9 +1378,6 @@ IMPORTANT: You MUST return your response as a valid JSON object with this exact 
         }}
     ]
 }}
-
-Do not include any text before or after the JSON. Only return valid JSON.
-If you have no relevant information, return: {{"points": []}}
 
 Community Report:
 {context_data}
@@ -1507,21 +1533,24 @@ class GlobalSearch:
             ]
             
             async with self.semaphore:
-                response = await self.model.ainvoke(
-                    messages, 
+                # response = await self.model.ainvoke(
+                #     messages,
+                #     **llm_kwargs,
+                # )
+
+                response =  self.model.invoke(
+                    messages,
                     **llm_kwargs,
                 )
+
                 search_response = response.content
                 logger.debug("Map response: %s", search_response)
             
             try:
                 # Parse search response json
                 processed_response = self._parse_search_response(search_response)
-                if not processed_response or processed_response == [{"answer": "", "score": 0}]:
-                    logger.warning("Warning: Empty or default response from parsing - may indicate LLM response issues")
-            except (ValueError, json.JSONDecodeError, Exception) as e:
-                logger.warning(f"Warning: Error parsing search response ({type(e).__name__}: {e}) - skipping this batch")
-                logger.debug(f"Problematic response: {search_response[:200]}...")
+            except ValueError:
+                logger.warning("Warning: Error parsing search response json - skipping this batch")
                 processed_response = []
             
             return SearchResult(
@@ -1534,16 +1563,8 @@ class GlobalSearch:
                 output_tokens=num_tokens(search_response, self.token_encoder),
             )
             
-        except Exception as e:
-            logger.exception(f"Exception in _map_response_single_batch: {type(e).__name__}: {e}")
-            # Provide more detailed error information for debugging
-            if "timeout" in str(e).lower():
-                logger.error("Timeout error - consider increasing timeout settings or reducing batch size")
-            elif "connection" in str(e).lower():
-                logger.error("Connection error - check network connectivity and service availability")
-            elif "json" in str(e).lower():
-                logger.error("JSON parsing error - LLM may not be following expected response format")
-            
+        except Exception:
+            logger.exception("Exception in _map_response_single_batch")
             return SearchResult(
                 response=[{"answer": "", "score": 0}],
                 context_data=context_data,
@@ -1557,121 +1578,34 @@ class GlobalSearch:
     def _parse_search_response(self, search_response: str) -> List[Dict[str, Any]]:
         """Parse the search response json and return a list of key points."""
         try:
-            # Clean up JSON response - handle multiple formats
-            original_response = search_response
-            
-            # Remove markdown code blocks
+            # Clean up JSON response
             if search_response.startswith('```json'):
-                search_response = search_response[7:]
-                if search_response.endswith('```'):
-                    search_response = search_response[:-3]
+                search_response = search_response[7:-3]
             elif search_response.startswith('```'):
-                search_response = search_response[3:]
-                if search_response.endswith('```'):
-                    search_response = search_response[:-3]
+                search_response = search_response[3:-3]
             
             search_response = search_response.strip()
             
-            # Handle empty or whitespace-only responses
-            if not search_response:
-                logger.warning("Empty search response received")
-                return [{"answer": "", "score": 0}]
-            
-            # Try to find JSON in the response if it contains other text
-            if '{' in search_response and '}' in search_response:
-                # Find the first opening brace and the matching closing brace
-                start_idx = search_response.find('{')
-                if start_idx != -1:
-                    # Count braces to find the matching closing brace
-                    brace_count = 0
-                    end_idx = -1
-                    for i, char in enumerate(search_response[start_idx:], start_idx):
-                        if char == '{':
-                            brace_count += 1
-                        elif char == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                end_idx = i
-                                break
-                    
-                    if end_idx != -1:
-                        search_response = search_response[start_idx:end_idx + 1]
-            
-            # Try parsing the JSON
-            try:
-                parsed_json = json.loads(search_response)
-            except json.JSONDecodeError as e:
-                # If JSON parsing fails, try to fix common issues
-                logger.warning(f"Initial JSON parse failed: {e}, attempting to fix...")
-                
-                # Try to fix common JSON issues
-                fixed_response = search_response
-                
-                # Remove any trailing commas
-                import re
-                fixed_response = re.sub(r',(\s*[}\]])', r'\1', fixed_response)
-                
-                # Try parsing again
-                try:
-                    parsed_json = json.loads(fixed_response)
-                    logger.info("Successfully parsed JSON after fixes")
-                except json.JSONDecodeError:
-                    # If still failing, log the problematic response and return default
-                    logger.error(f"Could not parse JSON response. Original: {original_response[:500]}...")
-                    print(f"JSON parsing failed. Raw response: {original_response[:200]}...")
-                    return [{"answer": "", "score": 0}]
+            parsed_json = json.loads(search_response)
             
             if not isinstance(parsed_json, dict):
-                logger.warning(f"Parsed JSON is not a dict: {type(parsed_json)}")
                 return [{"answer": "", "score": 0}]
             
             parsed_elements = parsed_json.get("points")
-            if not parsed_elements:
-                # Try alternative keys
-                for key in ["results", "items", "data", "responses"]:
-                    if key in parsed_json:
-                        parsed_elements = parsed_json[key]
-                        break
-                
-                if not parsed_elements:
-                    logger.warning("No 'points' or alternative keys found in parsed JSON")
-                    logger.warning(f"Parsed JSON keys: {list(parsed_json.keys()) if isinstance(parsed_json, dict) else 'Not a dict'}")
-                    logger.warning(f"Full parsed JSON: {parsed_json}")
-                    print(f"Warning: Empty or default response from parsing - may indicate LLM response issues")
-                    return [{"answer": "", "score": 0}]
-            
-            if not isinstance(parsed_elements, list):
-                logger.warning(f"Parsed elements is not a list: {type(parsed_elements)}")
+            if not parsed_elements or not isinstance(parsed_elements, list):
                 return [{"answer": "", "score": 0}]
             
-            results = []
-            for element in parsed_elements:
-                if isinstance(element, dict):
-                    # Handle various field names
-                    description = element.get("description") or element.get("answer") or element.get("text") or ""
-                    score = element.get("score", 0)
-                    
-                    # Convert score to int if possible
-                    try:
-                        score = int(float(score))
-                    except (ValueError, TypeError):
-                        score = 0
-                    
-                    if description:  # Only add if we have some content
-                        results.append({
-                            "answer": str(description),
-                            "score": score,
-                        })
+            return [
+                {
+                    "answer": element["description"],
+                    "score": int(element["score"]),
+                }
+                for element in parsed_elements
+                if "description" in element and "score" in element
+            ]
             
-            if not results:
-                logger.warning("No valid elements found in parsed JSON")
-                return [{"answer": "", "score": 0}]
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Unexpected error parsing search response: {e}")
-            logger.error(f"Response content (first 500 chars): {search_response[:500]}...")
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Error parsing search response: {e}")
             return [{"answer": "", "score": 0}]
     
     async def _reduce_response(
@@ -1755,11 +1689,16 @@ class GlobalSearch:
                 HumanMessage(content=query)
             ]
             
-            response = await self.model.ainvoke(
+            # response = await self.model.ainvoke(
+            #     messages,
+            #     **llm_kwargs,
+            # )
+
+            response = self.model.invoke(
                 messages,
                 **llm_kwargs,
             )
-            
+
             search_response = response.content
             
             return SearchResult(
@@ -2099,8 +2038,9 @@ class LightweightAdvancedGraphRAGRetriever:
         neo4j_uri = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
         neo4j_user = os.getenv('NEO4J_USER', 'neo4j')
         neo4j_password = os.getenv('NEO4J_PASSWORD', 'password')
-        
-        self.driver = neo4j.GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        neo4j_db = os.getenv('CLIENT_NEO4J_DATABASE', 'db')
+
+        self.driver = neo4j.GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password), database=neo4j_db)
         self.embeddings = get_embeddings()
         self.llm = get_llm()
         
@@ -2362,7 +2302,7 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
     Returns:
         Dictionary with response and retrieval details
     """
-    
+    logger.info(f"In advanced GraphRAG wit mode = {mode}")
     if mode == "local":
         return await query_advanced_graphrag_local(query, k=k, **kwargs)
     elif mode == "global":
@@ -2374,7 +2314,9 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
             retriever = LightweightAdvancedGraphRAGRetriever()
             
             # Run both local and global searches
+            logger.debug(f"Local Search started:")
             local_result = await retriever.local_search_query(query, top_k_mapped_entities=k, **kwargs)
+            logger.debug(f"Global Search started:")
             global_result = await retriever.global_search_query(query, **kwargs)
             
             # Combine responses - prioritize local but include global insights
@@ -2401,8 +2343,10 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
             
         except Exception as e:
             print(f"Error in hybrid advanced GraphRAG retrieval: {e}")
+            logger.error(f"Error in hybrid advanced GraphRAG retrieval: {e}")
             import traceback
             traceback.print_exc()
+            logger.error(f"Error in hybrid advanced GraphRAG retrieval: {e}. {traceback.print_exc()}")
             return {
                 'final_answer': f"Error during hybrid advanced GraphRAG retrieval: {str(e)}",
                 'retrieval_details': [],

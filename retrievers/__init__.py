@@ -17,11 +17,17 @@ try:
     from .chroma_retriever import query_chroma_rag, create_chroma_retriever, ChromaRetriever
     from .graph_rag_retriever import query_graphrag, create_graphrag_retriever, GraphRAGRetriever 
     from .text2cypher_retriever import query_text2cypher_rag, create_text2cypher_retriever, Text2CypherRAGRetriever
-    from .hybrid_cypher_retriever import (
-        query_hybrid_cypher_rag,
-        create_hybrid_cypher_retriever,
-        HybridCypherRAGRetriever
-    )
+    try:
+        from .hybrid_cypher_retriever import (
+            query_hybrid_cypher_rag,
+            create_hybrid_cypher_retriever,
+            HybridCypherRAGRetriever
+        )
+    except Exception as e:
+        import traceback
+        print("================FAILED===============")
+        print(traceback.print_exc())
+        print("================FAILED===============")
 
     from .neo4j_vector_retriever import query_neo4j_vector_rag, create_neo4j_vector_retriever, Neo4jVectorRetriever
     
@@ -51,6 +57,10 @@ try:
         DriftGraphRAGRetriever = None
 
 except ImportError as e:
+    import traceback
+    print("+"*30)
+    print(traceback.print_exc())
+    print("+"*35)
     print(f"Error importing retrievers: {e}")
     # Provide fallback None values
     query_chroma_rag = None

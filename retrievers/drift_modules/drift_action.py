@@ -13,11 +13,11 @@ from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 import logging
 
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from .drift_state import ActionMetadata
-from config.model_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class DRIFTActionConfig:
     """Configuration for DRIFT actions"""
     max_follow_ups: int = 3
     min_score_threshold: float = 20.0
-    # Removed temperature - let models use their defaults
+    temperature: float = 0.1
     auto_route: bool = True  # Use existing QueryClassifier
     default_search_type: str = "local"  # local, global, or hybrid
 
@@ -104,7 +104,7 @@ Search Results:
 Please analyze and provide structured response.""")
         ])
         
-        self.llm = get_llm(temperature=self.config.temperature)
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=self.config.temperature)
         self.action_chain = self.action_prompt | self.llm.with_structured_output(ActionResult)
     
     def _generate_action_id(self) -> str:

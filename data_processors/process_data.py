@@ -8,6 +8,13 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Optional
+from utils.graph_rag_logger import setup_logging, get_logger
+from dotenv import load_dotenv
+
+load_dotenv()
+
+setup_logging()
+logger = get_logger(__name__)
 
 def process_pdfs(pdf_dir: str = "PDFs", 
                 perform_resolution: bool = True,
@@ -15,7 +22,8 @@ def process_pdfs(pdf_dir: str = "PDFs",
     """Process PDF documents from a directory."""
     from build_graph import CustomGraphProcessor
     processor = CustomGraphProcessor()
-    print("⚡ Using enhanced CustomGraphProcessor with advanced features (refactored with research-based discovery)")
+    print("Using enhanced CustomGraphProcessor with advanced features (refactored with research-based discovery)")
+    logger.debug("Using enhanced CustomGraphProcessor with advanced features (refactored with research-based discovery)")
     
     try:
         if not Path(pdf_dir).exists():
@@ -254,6 +262,7 @@ Examples:
     try:
         # Process based on selected option
         if args.pdfs:
+            logger.debug(f'Processing PDFs....')
             result = process_pdfs(
                 pdf_dir=args.pdf_dir,
                 perform_resolution=not args.no_resolution,
@@ -281,4 +290,5 @@ Examples:
         sys.exit(1)
 
 if __name__ == "__main__":
+
     main()

@@ -22,16 +22,20 @@ from neo4j_graphrag.generation import GraphRAG
 from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, ModelProvider
 
 # Load environment variables
-load_dotenv(override=True)
+load_dotenv()
 
 # Neo4j configuration
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
-INDEX_NAME = "embedding" 
+NEO4J_DB = os.environ.get('CLIENT_NEO4J_DATABASE')
+
+INDEX_NAME = "chunk_embeddings" #sd43372 - made plural
 
 # Initialize embeddings and LLM using centralized configuration
-# Models are initialized per-instance, not at module level
+SEED = 42
+embeddings = get_neo4j_embeddings()
+llm = get_neo4j_llm()
 
 
 class Neo4jVectorRetriever:
@@ -51,10 +55,10 @@ class Neo4jVectorRetriever:
             embedder: Embedding model (optional, will use default if not provided)
             llm_model: LLM model (optional, will use default if not provided)
         """
-        self.driver = driver or GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        self.driver = driver or GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD), database=NEO4J_DB)
         self.index_name = index_name
-        self.embedder = embedder or get_neo4j_embeddings()
-        self.llm_model = llm_model or get_neo4j_llm()
+        self.embedder = embedder or embeddings
+        self.llm_model = llm_model or llm
         
         # Initialize the vector retriever
         self.vector_retriever = VectorRetriever(
@@ -101,14 +105,7 @@ class Neo4jVectorRetriever:
                     # Extract content and metadata from vector result
                     if hasattr(item, 'content'):
                         content = item.content
-                        
-                        # Extract score from metadata (neo4j-graphrag stores it there)
-                        score = 0.0
-                        if hasattr(item, 'metadata') and item.metadata:
-                            score = item.metadata.get('score', 0.0)
-                        else:
-                            # Fallback to direct score attribute
-                            score = getattr(item, 'score', 0.0)
+                        score = getattr(item, 'score', 0.0)
                         
                         # Parse content if it's a string representation
                         if isinstance(content, str):
@@ -124,8 +121,7 @@ class Neo4jVectorRetriever:
                             'rank': i,
                             'metadata': {
                                 'search_type': 'vector_similarity',
-                                'index_used': self.index_name,
-                                'neo4j_metadata': item.metadata if hasattr(item, 'metadata') else {}
+                                'index_used': self.index_name
                             }
                         })
             

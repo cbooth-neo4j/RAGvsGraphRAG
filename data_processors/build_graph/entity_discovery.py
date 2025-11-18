@@ -26,6 +26,13 @@ except ImportError:
 # Import centralized configuration
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config import get_llm
+from utils.graph_rag_logger import setup_logging, get_logger
+from dotenv import load_dotenv
+
+load_dotenv()
+
+setup_logging()
+logger = get_logger(__name__)
 
 class EntityDiscoveryMixin:
     """
@@ -462,7 +469,7 @@ class EntityDiscoveryMixin:
         """Original hybrid sampling method - kept for backward compatibility."""
         samples = []
         total_chars = 0
-        max_chars = 8000  # Token budget
+        max_chars = 350000 #8000  # Token budget - close to 500,000 tokens
         
         for pdf_path in pdf_files[:20]:  # Limit to first 20 files for performance
             try:
@@ -477,8 +484,8 @@ class EntityDiscoveryMixin:
                 total_chars += len(doc_title)
                 
                 # First 500 + last 500 chars (intro/conclusion entity density)
-                first_part = text[:500].strip()
-                last_part = text[-500:].strip() if len(text) > 1000 else ""
+                first_part = text[:15000].strip() #text[:500].strip()
+                last_part = text[-15000:].strip() if len(text) > 1000 else "" #text[-500:].strip() if len(text) > 1000 else ""
                 
                 if first_part:
                     samples.append(f"Beginning: {first_part}")
@@ -502,7 +509,9 @@ class EntityDiscoveryMixin:
                 print(f"Warning: Could not sample from {pdf_path}: {e}")
                 continue
         
-        return "\n\n".join(samples)[:max_chars]
+        sample_corpus_text = "\n\n".join(samples)[:max_chars]
+        logger.debug(f'Sample Corpus Text for entity label extraction is : {len(sample_corpus_text)}')
+        return sample_corpus_text
     
     def discover_corpus_labels(self, pdf_files: List[Path]) -> List[str]:
         """Discover labels corpus-wide using hybrid sampling strategy."""
@@ -516,15 +525,17 @@ class EntityDiscoveryMixin:
         
         # Sample corpus text
         print("🔍 Sampling corpus text for entity discovery...")
+        logger.debug("🔍 Sampling corpus text for entity discovery...")
         corpus_sample = self._sample_corpus_text(pdf_files)
-        
+        logger.debug(f"Corpus Sample length: {len(corpus_sample)}")
+
         if not corpus_sample.strip():
             print("⚠️ No text could be sampled from corpus")
             return []
         
         # Discover labels
         print("🧠 Analyzing corpus with LLM...")
-        proposed_labels = self.discover_labels_for_text(corpus_sample)
+        proposed_labels = self.discover_labels_for_text(corpus_sample, 30) ##added 30
         
         # CLI approval
         approved_labels = self._approve_labels_cli(proposed_labels)
@@ -535,10 +546,10 @@ class EntityDiscoveryMixin:
         
         return approved_labels
     
-    def discover_labels_for_text(self, text: str, max_labels: int = 12) -> List[str]:
+    def discover_labels_for_text(self, text: str, max_labels: int = 30) -> List[str]:
         """Discover entity labels from text using LLM."""
         # Truncate text to fit in prompt
-        text_sample = text[:12000]
+        text_sample = text  #text[:12000]
         
         prompt = f"""
         Analyze the following text and propose up to {max_labels} entity types (labels) that would be most useful for knowledge graph construction.
@@ -623,7 +634,7 @@ class EntityDiscoveryMixin:
         print(f"  [n] None (use basic labels)")
         
         while True:
-            choice = input("Your choice: ").strip().lower()
+            choice = 'a' # input("Your choice: ").strip().lower()
             
             if choice == 'a':
                 print(f"✅ Approved all {len(proposed_labels)} labels")
@@ -721,7 +732,8 @@ class EntityDiscoveryMixin:
             
             if not json_content:
                 raise json.JSONDecodeError("No valid JSON found in response", content, 0)
-            
+
+            logger.debug(f"JSON content: {json_content}")
             entities = json.loads(json_content)
             
             # Validate structure
@@ -765,6 +777,7 @@ class EntityDiscoveryMixin:
             List of discovered entity type names
         """
         print("🚀 Starting enhanced entity discovery...")
+        logger.debug(f"discover_labels_for_text_enhanced: Starting enhanced entity discovery")
         
         # Enhanced sampling
         sample_result = self._sample_corpus_text_enhanced(documents)
@@ -796,7 +809,7 @@ class EntityDiscoveryMixin:
         that would be valuable for building a comprehensive knowledge graph.
         
         TEXT SAMPLE:
-        {sample_text[:10000]}
+        {sample_text}
         
         Instructions:
         1. Focus on entity types that appear multiple times or are central to the domain

@@ -20,10 +20,10 @@ Components:
 
 Usage:
     from retrievers.drift_modules import DRIFTSearch, DRIFTConfig
-    from data_processors.build_graph import CustomGraphProcessor
+    from data_processors import AdvancedGraphProcessor
     
     # Initialize with existing graph processor
-    processor = CustomGraphProcessor()
+    processor = AdvancedGraphProcessor()
     drift_search = DRIFTSearch(processor)
     
     # Perform DRIFT search

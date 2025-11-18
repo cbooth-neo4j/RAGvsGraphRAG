@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 from datasets import load_dataset
+from dotenv import load_dotenv
 from tqdm import tqdm
 
 # Add parent directories to path for imports
@@ -20,6 +21,14 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from .configs import INGESTION_PRESETS, DATASET_SIZES, DOMAIN_CATEGORIES
 
+
+load_dotenv()
+
+from utils.graph_rag_logger import setup_logging, get_logger
+
+
+setup_logging()
+logger = get_logger(__name__)
 
 class RAGBenchIngester:
     """
@@ -241,6 +250,7 @@ class RAGBenchIngester:
         
         # Setup database schema
         print("   Setting up database schema...")
+        logger.debug("Setting up database schema...")
         self.processor.setup_database_schema()
         
         # Trigger entity label discovery and approval if needed

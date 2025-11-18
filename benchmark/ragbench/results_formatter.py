@@ -55,18 +55,13 @@ class RAGBenchResultsFormatter:
         self.results_data.append(result)
     
     def create_comparison_csv(self, 
-                             output_path: str = None) -> str:
+                             output_path: str = "benchmark/ragbench/data/detailed_comparison.csv") -> str:
         """
         Create a detailed CSV with all questions, responses, and scores.
         """
         
         if not self.results_data:
             raise ValueError("No results data to format. Add results first.")
-        
-        # Generate default output path with timestamp if none provided
-        if output_path is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"benchmark_outputs/run_{timestamp}/detailed_comparison.csv"
         
         # Prepare data for CSV
         csv_data = []

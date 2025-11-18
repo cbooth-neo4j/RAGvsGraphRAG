@@ -12,8 +12,8 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 import json
 
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from config.model_factory import get_llm
 
 from .drift_context import DRIFTContextBuilder, DRIFTContextConfig
 from .drift_primer import DRIFTPrimer, PrimerConfig
@@ -28,7 +28,7 @@ class DRIFTConfig:
     n_depth: int = 3                           # Maximum search depth
     max_follow_ups: int = 3                    # Max follow-ups per iteration
     max_concurrent: int = 3                    # Max concurrent LLM calls
-    # Removed temperature - let models use their defaults
+    temperature: float = 0.1                   # LLM temperature
     min_relevance_score: float = 20.0          # Minimum score for including results
     enable_primer: bool = True                 # Enable primer phase
     enable_reduce: bool = True                 # Enable reduction phase
@@ -125,14 +125,14 @@ class DRIFTSearch:
         Initialize DRIFT search
         
         Args:
-            graph_processor: CustomGraphProcessor instance with Neo4j connection
+            graph_processor: AdvancedGraphProcessor instance with Neo4j connection
             config: Optional DRIFT configuration
         """
         self.graph_processor = graph_processor
         self.config = config or DRIFTConfig()
         
-        # Initialize LLM first (needed by retrievers) - let model use default temperature
-        self.llm = get_llm()
+        # Initialize LLM first (needed by retrievers)
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=self.config.temperature)
         
         # Initialize components with error handling
         try:
@@ -529,7 +529,7 @@ async def query_drift_search(query: str, k: int = 5, graph_processor=None, **kwa
     Args:
         query: The search query
         k: Parameter for compatibility (used in max_concurrent)
-        graph_processor: Optional existing CustomGraphProcessor instance
+        graph_processor: Optional existing AdvancedGraphProcessor instance
         **kwargs: Additional configuration options
         
     Returns:
@@ -541,11 +541,11 @@ async def query_drift_search(query: str, k: int = 5, graph_processor=None, **kwa
             processor = graph_processor
         else:
             # Import graph processor
-            from data_processors.build_graph import CustomGraphProcessor
+            from data_processors import AdvancedGraphProcessor
             
             # Initialize processor and DRIFT search with error handling
             try:
-                processor = CustomGraphProcessor()
+                processor = AdvancedGraphProcessor()
                 print("✅ Neo4j connection successful")
             except Exception as e:
                 print(f"⚠️ Neo4j connection failed: {e}")
@@ -600,7 +600,7 @@ def create_drift_search(graph_processor, config: Optional[DRIFTConfig] = None) -
     Factory function to create DRIFT search instance
     
     Args:
-        graph_processor: CustomGraphProcessor instance
+        graph_processor: AdvancedGraphProcessor instance
         config: Optional DRIFT configuration
         
     Returns:

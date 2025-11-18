@@ -18,15 +18,17 @@ import warnings
 from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm
 
 # Load environment variables
-load_dotenv(override=True)
+load_dotenv()
 
 # Neo4j configuration
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
+CLIENT_NEO4J_DATABASE = os.environ.get('CLIENT_NEO4J_DATABASE')
+
 
 # Index names for entity-focused hybrid search (Local Entity HybridCypherRetriever)
-VECTOR_INDEX_NAME = "embedding"  # Vector index on all nodes with embeddings
+VECTOR_INDEX_NAME = "entity_embeddings"  # Vector index on __Entity__.embedding #sd43372/made plural
 FULLTEXT_INDEX_NAME = "entity_fulltext_idx"  # Full-text index on __Entity__.name, description
 
 class HybridCypherRAGRetriever:
@@ -50,20 +52,26 @@ class HybridCypherRAGRetriever:
             self.embeddings = get_neo4j_embeddings()
             self.llm = get_neo4j_llm()
         except Exception as e:
-            raise RuntimeError(f"Could not initialize configured models: {e}. Please check your .env configuration.")
+            warnings.warn(f"Could not initialize configured models, falling back to defaults: {e}")
+            logger.error(f"Failed to create embedding model or Neo4J Wrapper...")
+            # Fallback imports for backward compatibility
+            #from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
+            #from neo4j_graphrag.llm import OpenAILLM
+            #self.embeddings = OpenAIEmbeddings()
+            #self.llm = OpenAILLM(model_name="gpt-4o-mini", model_params={"temperature": 0})
         
         self.neo4j_uri = NEO4J_URI
         self.neo4j_user = NEO4J_USER
         self.neo4j_password = NEO4J_PASSWORD
+        self.neo4j_db = CLIENT_NEO4J_DATABASE
         self.vector_index_name = VECTOR_INDEX_NAME
         self.fulltext_index_name = FULLTEXT_INDEX_NAME
         
         # Complete Local Entity HybridCypherRetriever query
         # This performs hybrid search on entities, then expands context via graph traversal
-        # Updated for Neo4j 5.23+ - using simplified approach without variable scope for parameters
         self.retrieval_query = """
-        // Hybrid search on entities (vector + fulltext) using CALL subquery
-        CALL () {
+        // Hybrid search on entities (vector + fulltext)
+        CALL {
             // Vector search on entity embeddings
             CALL db.index.vector.queryNodes($vector_index_name, $top_k, $query_vector) 
             YIELD node AS vector_node, score AS vector_score
@@ -85,29 +93,51 @@ class HybridCypherRAGRetriever:
              collect({id: elementId(node), score: score}) AS metadata
         
         // Graph expansion for Local Entity pattern
-        // Use a simpler approach that avoids the deprecated collect expressions
-        WITH nodes, avg_score, metadata,
-             // Get chunks connected to our entities
-             [n IN nodes | [(n)<-[:HAS_ENTITY]-(c:Chunk) | c]] AS chunk_lists,
-             // Get communities our entities belong to
-             [n IN nodes | [(n)-[:IN_COMMUNITY]->(comm:__Community__) | comm]] AS community_lists
-        
-        // Flatten and deduplicate the lists
-        WITH nodes, avg_score, metadata,
-             apoc.coll.flatten(chunk_lists)[0..3] AS chunks,
-             apoc.coll.flatten(community_lists)[0..3] AS communities
-        
-        // Get relationships between entities and outside entities
-        OPTIONAL MATCH (n)-[r]-(m) 
-        WHERE n IN nodes AND m IN nodes AND n <> m
-        WITH nodes, avg_score, metadata, chunks, communities, collect(DISTINCT r) AS rels
-        
-        OPTIONAL MATCH (n)-[r]-(outside_entity:__Entity__)
-        WHERE n IN nodes AND NOT outside_entity IN nodes
-        WITH nodes, avg_score, metadata, chunks, communities, rels,
-             collect(DISTINCT {entity: outside_entity, relationship: r})[0..10] AS outside
-        
-        RETURN avg_score AS score, nodes, metadata, chunks, communities, rels, outside
+        RETURN avg_score AS score, nodes, metadata,
+
+            // Find top co-mentioned chunks
+            collect {
+                UNWIND nodes AS n
+                MATCH (n)<-[:HAS_ENTITY]-(c:Chunk)
+                WITH c, count(distinct n) AS freq
+                RETURN c
+                ORDER BY freq DESC
+                LIMIT 3
+            } AS chunks,
+
+            // Find relevant communities
+            collect {
+                UNWIND nodes AS n
+                OPTIONAL MATCH (n)-[:IN_COMMUNITY]->(comm:__Community__)
+                WITH comm, 
+                     coalesce(comm.community_rank, 0) AS rank, 
+                     coalesce(comm.weight, 1.0) AS weight
+                WHERE comm IS NOT NULL
+                RETURN comm
+                ORDER BY rank DESC, weight DESC
+                LIMIT 3
+            } AS communities,
+
+            // Find relationships between found entities
+            collect {
+                UNWIND nodes AS n
+                UNWIND nodes AS m
+                MATCH (n)-[r]->(m)
+                WHERE n <> m
+                RETURN DISTINCT r
+            } AS rels,
+
+            // Find outside entities (1-hop neighbors not in initial results)
+            collect {
+                UNWIND nodes AS n
+                MATCH (n)-[r]-(outside_entity:__Entity__)
+                WHERE NOT outside_entity IN nodes
+                WITH outside_entity, collect(distinct r) AS rels, count(*) AS freq
+                ORDER BY freq DESC
+                LIMIT 10
+                WITH collect(outside_entity) AS outsideNodes, apoc.coll.flatten(collect(rels)) AS rels
+                RETURN { nodes: outsideNodes, rels: rels }
+            } AS outside
         """
 
     def _sanitize_fulltext_query(self, query: str) -> str:
@@ -152,7 +182,7 @@ class HybridCypherRAGRetriever:
             - outside_entities: Related entities not in the initial search
         """
 
-        with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password)) as driver:
+        with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password), database=self.neo4j_db) as driver:
             print(f"🔍 Executing Hybrid Cypher GraphRAG query for: {query}")
 
             try:

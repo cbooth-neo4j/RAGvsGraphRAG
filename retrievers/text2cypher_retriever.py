@@ -22,18 +22,25 @@ load_dotenv()
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
+NEO4J_DB = os.environ.get('CLIENT_NEO4J_DATABASE')
 
-# Models are initialized per-instance, not at module level
+# Initialize components with centralized configuration
+SEED = 42
+embeddings = get_neo4j_embeddings()
+
+# Use centralized LLM configuration for Cypher query generation
+text2cypher_llm = get_neo4j_llm()
 
 class Text2CypherRAGRetriever:
     """Text2Cypher retriever with natural language to Cypher conversion"""
     
     def __init__(self):
-        self.embeddings = get_neo4j_embeddings()
-        self.llm = get_neo4j_llm()
+        self.embeddings = embeddings
+        self.llm = text2cypher_llm
         self.neo4j_uri = NEO4J_URI
         self.neo4j_user = NEO4J_USER
         self.neo4j_password = NEO4J_PASSWORD
+        self.neo4j_db = NEO4J_DB
         
         # Few-shot examples - ALWAYS use chunk text search for specific company/data questions
         self.examples = [
@@ -60,6 +67,7 @@ class Text2CypherRAGRetriever:
                 url=self.neo4j_uri,
                 username=self.neo4j_user,
                 password=self.neo4j_password,
+                database=self.neo4j_db,
                 enhanced_schema=True
             )
             
@@ -75,7 +83,7 @@ class Text2CypherRAGRetriever:
     def search(self, query: str) -> Dict[str, Any]:
         """Neo4j Text2Cypher query with natural language to Cypher conversion"""
         
-        with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password)) as driver:
+        with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password), database=self.neo4j_db) as driver:
             print(f"🔍 Executing Text2Cypher query for: {query}")
             
             try:
@@ -85,7 +93,7 @@ class Text2CypherRAGRetriever:
                     llm=self.llm,
                     neo4j_schema=self.neo4j_schema,
                     examples=self.examples,
-                    neo4j_database="neo4j"
+                    neo4j_database=self.neo4j_db
                 )
                 
                 print(f"🔍 Text2Cypher retriever initialized successfully")

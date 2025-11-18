@@ -119,9 +119,9 @@ def run_full_pipeline(preset_name: str,
     evaluator = RAGBenchEvaluator(eval_data_path)
     evaluator.print_evaluation_summary()
     
-    # Create benchmark JSONL
-    benchmark_jsonl = evaluator.create_benchmark_jsonl(
-        output_path=f"benchmark/ragbench__{preset_name}_benchmark.jsonl"
+    # Create benchmark CSV
+    benchmark_csv = evaluator.create_benchmark_csv(
+        output_path=f"benchmark/ragbench__{preset_name}_benchmark.csv"
     )
     
     # Phase 3: Run RAGAS Evaluation
@@ -132,15 +132,10 @@ def run_full_pipeline(preset_name: str,
     # Import and run ragas_benchmark
     from ragas_benchmark import main_selective
     
-    # Create timestamped output directory
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    timestamped_output_dir = f"benchmark_outputs/{preset_name}/run_{timestamp}"
-    
     # Run benchmark with specified approaches
     benchmark_results = main_selective(
         approaches=approaches,
-        output_dir=timestamped_output_dir
+        output_dir=f"benchmark_outputs/{preset_name}"
     )
     
     # Phase 4: Final Summary
@@ -148,7 +143,7 @@ def run_full_pipeline(preset_name: str,
     print("PIPELINE COMPLETE! 🎉")
     print("="*60)
     
-    print(f"📁 All outputs saved to: {timestamped_output_dir}/")
+    print(f"📁 All outputs saved to: benchmark_outputs/{preset_name}/")
     print(f"🌐 Open detailed_results.html in your browser for human review")
     print(f"📊 Check summary_report.json for aggregated statistics")
     

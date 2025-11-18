@@ -7,6 +7,8 @@ import os
 import time
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
+
+from utils.graph_rag_logger import setup_logging, get_logger
 from .entity_discovery import EntityDiscoveryMixin
 from .text_processing import TextProcessingMixin
 from .graph_operations import GraphOperationsMixin
@@ -16,6 +18,13 @@ from .advanced_processing import AdvancedProcessingMixin
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config import get_model_config
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+setup_logging()
+logger = get_logger(__name__)
 
 class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOperationsMixin, AdvancedProcessingMixin):
     """
@@ -42,16 +51,19 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         
         # Initialize all mixins
         super().__init__()
-        
+
+        logger.debug("In __init__ method of 'Enhanced' CustomGraphProcessor with mixins. Next step is setup_Database_schema...")
         # Set up database schema
         self.setup_database_schema()
         
         print("🚀 Enhanced CustomGraphProcessor initialized")
+        logger.info("Enhanced CustomGraphProcessor initialized")
         print("   ✅ Entity discovery with enhanced sampling")
         print("   ✅ Text processing with PDF and table extraction")
         print("   ✅ Graph operations with Neo4j")
         print(f"   ✅ Relationship strategy: {relationship_strategy}")
-    
+        logger.info(f"Relationship strategy: {relationship_strategy}")
+
     def process_document(self, pdf_path: str) -> Dict[str, Any]:
         """
         Process a PDF document into the knowledge graph.
@@ -62,6 +74,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         Returns:
             Processing statistics and metadata
         """
+        logger.info(f"Processing document into KG. In process_document method: {pdf_path}")
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
         
@@ -93,12 +106,14 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         # Per-document discovery if needed (fallback if corpus-wide failed)
         if not self.discovered_labels:
             print("\n🔎 Discovering entity labels from document text...")
+            logger.info("Discovering entity labels from document text...")
             proposed_labels = self.discover_labels_for_text(text)
             self.discovered_labels = self._approve_labels_cli(proposed_labels)
             print(f"\n✅ Using labels: {self.discovered_labels}")
+            logger.info(f"\n✅ Using labels: {self.discovered_labels}")
         
         # Create document embedding
-        doc_embedding = self.create_embedding(text[:8000])  # Limit for embedding
+        doc_embedding = self.create_embedding(text) #[:8000])  # Limit for embedding
         
         # Chunk text
         chunks = self.chunk_text(text, doc_name)
@@ -110,7 +125,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         if table_chunks:
             chunks.extend(table_chunks)
         print(f"Created {len(chunks)} chunks (including {len(table_chunks)} table chunks)")
-        
+        logger.info(f"Created {len(chunks)} chunks (including {len(table_chunks)} table chunks)")
         # Create embeddings for chunks
         chunk_texts = [chunk['text'] for chunk in chunks]
         chunk_embeddings = self.create_embeddings_batch(chunk_texts)
@@ -144,6 +159,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                         self.create_entity_relationships_dynamic(session, entity_ids, chunk['text'])
             
             print(f"Extracted {total_entities} entities across {len(chunks)} chunks")
+            logger.info(f"Extracted {total_entities} entities across {len(chunks)} chunks")
         
         return {
             'document_id': doc_id,
@@ -164,8 +180,13 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         Returns:
             Overall processing statistics
         """
+        logger.debug(f"Processing directory: {pdf_dir}. About to clear the Graph DB: {self.neo4j_db}")
         # Clear database first
         self.clear_database()
+
+        ## Confirm this -- set db schema?
+        logger.debug(f"Setting up the database: {self.neo4j_db}")
+        self.setup_database_schema()
         
         pdf_dir_path = Path(pdf_dir)
         if not pdf_dir_path.exists():
@@ -177,12 +198,15 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             raise ValueError(f"No PDF files found in {pdf_dir}")
         
         print(f"📁 Processing {len(pdf_files)} PDF files from {pdf_dir}")
+        logger.info(f"Processing {len(pdf_files)} PDF files from {pdf_dir}")
         
         # Discover labels corpus-wide first
         if not self.discovered_labels:
             self.discovered_labels = self.discover_corpus_labels(pdf_files)
+            logger.info(f"Labels discovered: {self.discovered_labels}")
             if not self.discovered_labels:
                 print("⚠️ No labels discovered, using default set")
+                logger.warning("No labels discovered, using default set")
                 self.discovered_labels = ["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT"]
         
         # Process each document
@@ -192,6 +216,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         
         for pdf_path in pdf_files:
             try:
+                logger.debug(f'Processing file in path: {pdf_path}')
                 result = self.process_document(str(pdf_path))
                 results.append(result)
                 total_chunks += result['chunks_created']
@@ -208,6 +233,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         # Perform entity resolution if requested
         if perform_resolution:
             print("\n🔗 Creating chunk similarity relationships...")
+            logger.info("Creating chunk similarity relationships...")
             self.create_chunk_similarity_relationships()
             
             print("\n🔍 Performing entity resolution...")
@@ -228,9 +254,15 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         print(f"   Chunks: {summary['total_chunks_created']:,}")
         print(f"   Entities: {summary['total_entities_created']:,}")
         print(f"   Entity types: {len(summary['entity_types_discovered'])}")
-        
+
+        logger.info(f"Processing Summary:")
+        logger.info(f"   Documents: {summary['successful_documents']}/{summary['total_documents']} successful")
+        logger.info(f"   Chunks: {summary['total_chunks_created']:,}")
+        logger.info(f"   Entities: {summary['total_entities_created']:,}")
+        logger.info(f"   Entity types: {len(summary['entity_types_discovered'])}")
         # Automatically perform advanced processing
         print(f"\n🚀 Starting advanced processing (summarization + community detection)...")
+        logger.info(f"Starting advanced processing (summarization + community detection)...")
         graph_stats = self.get_graph_statistics()
         advanced_results = self.perform_advanced_processing(graph_stats)
         

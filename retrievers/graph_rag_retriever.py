@@ -17,15 +17,21 @@ import ast
 
 # Import centralized configuration
 from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, ModelProvider
+from utils.graph_rag_logger import setup_logging, get_logger
 
 # Load environment variables
-load_dotenv(override=True)
+load_dotenv()
+
+setup_logging()
+logger = get_logger(__name__)
 
 # Neo4j configuration
 NEO4J_URI = os.environ.get('NEO4J_URI')
 NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
-INDEX_NAME = "embedding"  # Match the actual index name in Neo4j
+NEO4J_DATABASE = os.environ.get('CLIENT_NEO4J_DATABASE')
+
+INDEX_NAME = "chunk_embeddings"  # Match the actual index name in Neo4j
 
 # Initialize components with centralized configuration
 SEED = 42
@@ -40,14 +46,17 @@ class GraphRAGRetriever:
         self.neo4j_uri = NEO4J_URI
         self.neo4j_user = NEO4J_USER
         self.neo4j_password = NEO4J_PASSWORD
+        self.neo4j_db = NEO4J_DATABASE
         self.index_name = INDEX_NAME
+        logger.debug(f'GraphRAGRetriever initialized with index name: {INDEX_NAME} and db: {self.neo4j_db}')
     
     def search(self, query: str, k: int = 3) -> Dict[str, Any]:
         """Neo4j GraphRAG query with LLM response generation"""
         
-        with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password)) as driver:
+        with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password), database=self.neo4j_db) as driver:
             print(f"🔍 Executing GraphRAG query for: {query}")
-            
+            logger.info(f"🔍 Executing GraphRAG query for: {query}")
+
             # Query parameters for the simplified pattern (we don't actually use query_vector in our Cypher)
             query_params = {}
             
@@ -65,6 +74,8 @@ class GraphRAGRetriever:
                     vector_results = vector_retriever.search(query_text=query, top_k=5)
                     
                 except Exception as vector_error:
+                    import traceback
+                    logger.error(f'Failed to search via vector retrieve: {traceback.print_exc()}')
                     print(f"⚠️ Vector search failed: {vector_error}")
                     print(f"🔄 Falling back to direct chunk retrieval...")
                     
@@ -75,7 +86,7 @@ class GraphRAGRetriever:
                     LIMIT 5
                     """
                     
-                    fallback_result = driver.execute_query(fallback_query, database_="neo4j")
+                    fallback_result = driver.execute_query(fallback_query, database_= self.neo4j_db)
                     
                     # Create a mock vector_results structure
                     class MockResult:
@@ -94,7 +105,7 @@ class GraphRAGRetriever:
                         mock_items.append(MockResult(content, chunk_id))
                     
                     vector_results = MockResults(mock_items) 
-                
+                logger.debug(f'Vector Results: {vector_results}')
                 if not vector_results:
                     return {
                         'method': 'GraphRAG + LLM',
@@ -207,7 +218,7 @@ class GraphRAGRetriever:
                         cypher_query,
                         chunk_data=chunk_data,
                         **query_params,
-                        database_="neo4j"
+                        database_= self.neo4j_db
                     )
                 
                 # Format results for LLM processing
@@ -316,6 +327,7 @@ def query_graphrag(query: str, k: int = 3, **kwargs) -> Dict[str, Any]:
     Returns:
         Dictionary with response and retrieval details
     """
+    logger.debug(f'In query_graphrag with top-k: {k} & query: {query}')
     try:
         retriever = create_graphrag_retriever()
         result = retriever.search(query, k)

@@ -28,7 +28,7 @@ class SimpleRAGBenchIngester:
     def __init__(self, processor_type: str = "basic"):
         """Initialize with the appropriate graph processor"""
         if processor_type == "basic":
-            from data_processors.build_graph.main_processor import CustomGraphProcessor
+            from data_processors.build_graph import CustomGraphProcessor
             self.processor = CustomGraphProcessor()
         elif processor_type == "advanced":  
             from data_processors.advanced_graph_processor import AdvancedGraphProcessor
@@ -38,7 +38,7 @@ class SimpleRAGBenchIngester:
         
         self.evaluation_cache = []
     
-    def run_preset(self, preset_name: str) -> Dict[str, Any]:
+    def load_and_process_preset(self, preset_name: str) -> Dict[str, Any]:
         """Load RAGBench data and process through graph processor"""
         
         if preset_name not in INGESTION_PRESETS:

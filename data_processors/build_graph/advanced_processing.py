@@ -25,7 +25,17 @@ from langchain_core.output_parsers import StrOutputParser
 
 # Import centralized configuration
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from utils.graph_rag_logger import setup_logging, get_logger
+from dotenv import load_dotenv
+
+load_dotenv()
+
+setup_logging()
+logger = get_logger(__name__)
+
 from config import get_llm
+
 
 @dataclass
 class ElementSummary:
@@ -44,6 +54,7 @@ class CommunityReport(BaseModel):
     title: str = Field(description="A descriptive title for this community")
     summary: str = Field(description="A comprehensive summary of the community's main themes and relationships")
     rating: float = Field(description="A numeric rating of the community's importance (0-10)")
+    rating_explanation: str = Field(description="Explanation of the importance rating")
 
 class AdvancedProcessingMixin:
     """Mixin providing advanced graph processing capabilities with configurable models"""
@@ -72,6 +83,7 @@ class AdvancedProcessingMixin:
         batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
         
         print(f"📝 Processing {len(items)} entity summaries in {len(batches)} batches...")
+        logger.info(f"Processing {len(items)} entity summaries in {len(batches)} batches...")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all batches
@@ -81,18 +93,23 @@ class AdvancedProcessingMixin:
             }
             
             # Process completed batches
-            for future in tqdm(as_completed(future_to_batch), total=len(batches), desc="Entity summarization"):
+            #for future in tqdm(as_completed(future_to_batch), total=len(batches), desc="Entity summarization"):
+            logger.info(f'Total length of batches: {len(batches)}')
+            for future in as_completed(future_to_batch):
                 batch_idx = future_to_batch[future]
+                logger.info(f'Processing batch index: {batch_idx}')
                 try:
                     batch_summaries = future.result()
                     summaries.update(batch_summaries)
                 except Exception as e:
+                    logger.error(f"Error processing batch {batch_idx}: {e}")
                     print(f"⚠️ Error processing batch {batch_idx}: {e}")
         
         return summaries
     
     def _process_entity_batch(self, batch: List[Tuple[str, ElementSummary]]) -> Dict[str, str]:
         """Process a batch of entities for summarization"""
+        logger.info("In _process_entity_batch")
         batch_summaries = {}
         
         for entity_name, element_summary in batch:
@@ -102,11 +119,12 @@ class AdvancedProcessingMixin:
                     batch_summaries[entity_name] = summary
             except Exception as e:
                 print(f"⚠️ Error summarizing entity {entity_name}: {e}")
-        
+                logger.error(f"Error summarizing entity {entity_name}: {e}")
         return batch_summaries
     
     def _generate_entity_summary(self, element_summary: ElementSummary) -> Optional[str]:
         """Generate a summary for a single entity using LLM"""
+        logger.info("In _generate_entity_summary")
         if not element_summary.description.strip():
             return None
             
@@ -135,8 +153,9 @@ class AdvancedProcessingMixin:
             return result.summary
         except Exception as e:
             print(f"⚠️ LLM error for entity {element_summary.name}: {e}")
+            logger.error(f"LLM error for entity {element_summary.name}: {e}")
             return None
-    
+
     def perform_element_summarization(self, summarize_entities: bool = True, summarize_relationships: bool = False):
         """
         Perform element summarization on entities and relationships
@@ -161,51 +180,66 @@ class AdvancedProcessingMixin:
                    connected_entities,
                    elementId(e) as element_id
             """
-            
-            results = list(self.driver.execute_query(entity_query).records)
-            print(f"📊 Found {len(results)} entities to summarize")
-            
-            # Prepare summaries
-            entity_summaries = {}
-            for record in results:
-                entity_name = record['entity_name']
-                relationships = record['relationships'] or []
-                connected_entities = record['connected_entities'] or []
-                current_desc = record['current_description'] or ""
-                
-                # Build context description
-                context_parts = []
-                if current_desc:
-                    context_parts.append(f"Current description: {current_desc}")
-                if relationships:
-                    context_parts.append(f"Relationships: {', '.join(relationships[:10])}")  # Limit to avoid token overflow
-                if connected_entities:
-                    context_parts.append(f"Connected to: {', '.join(connected_entities[:10])}")
-                
-                context = " | ".join(context_parts)
-                
-                entity_summaries[entity_name] = ElementSummary(
-                    name=entity_name,
-                    type="entity",
-                    description=context,
-                    element_id=record['element_id']
-                )
-            
-            # Generate summaries
-            summaries = self.batch_summarize_entities(entity_summaries)
-            
-            # Update database
-            if summaries:
-                print(f"💾 Updating {len(summaries)} entity descriptions...")
-                for entity_name, summary in summaries.items():
-                    update_query = """
-                    MATCH (e:Entity {name: $entity_name})
-                    SET e.ai_summary = $summary,
-                        e.summary_generated_at = datetime()
-                    """
-                    self.driver.execute_query(update_query, entity_name=entity_name, summary=summary)
-                
-                print(f"✅ Updated {len(summaries)} entity summaries")
+            with self.driver.session(database = os.getenv('CLIENT_NEO4J_DATABASE')) as session:
+                results = list(session.run(entity_query))
+                #logger.debug(f"Results: {results}")
+
+                #results = list(self.driver.execute_query(entity_query).records) #sd43372 commented
+                print(f"Found {len(results)} entities to summarize")
+                logger.info(f"Found {len(results)} entities to summarize")
+
+                # Prepare summaries
+                entity_summaries = {}
+                for record in results:
+                    entity_name = record['entity_name']
+                    relationships = record['relationships'] or []
+                    connected_entities = record['connected_entities'] or []
+                    current_desc = record['current_description'] or ""
+
+                    # Build context description
+                    context_parts = []
+                    if current_desc:
+                        context_parts.append(f"Current description: {current_desc}")
+                    if relationships:
+                        context_parts.append(f"Relationships: {', '.join(relationships[:10])}")  # Limit to avoid token overflow
+                    if connected_entities:
+                        context_parts.append(f"Connected to: {', '.join(connected_entities[:10])}")
+
+                    context = " | ".join(context_parts)
+
+                    entity_summaries[entity_name] = ElementSummary(
+                        name=entity_name,
+                        type="entity",
+                        description=context,
+                        element_id=record['element_id']
+                    )
+
+                # Generate summaries
+                summaries = self.batch_summarize_entities(entity_summaries)
+
+                # Update database
+                if summaries:
+                    print(f"💾 Updating {len(summaries)} entity descriptions...")
+                    logger.info(f"Updating {len(summaries)} entity descriptions...")
+                    for entity_name, summary in summaries.items():
+                        update_query = """
+                        MATCH (e:Entity {name: $entity_name})
+                        SET e.ai_summary = $summary,
+                            e.summary_generated_at = datetime()
+                        """
+                        self.driver.execute_query(update_query, entity_name=entity_name, summary=summary)
+
+                    for entity_name, summary in summaries.items():
+                        update_query = """
+                        MATCH (e:__Entity__ {name: $entity_name})
+                        SET e.ai_summary = $summary,
+                            e.summary_generated_at = datetime()
+                        """
+                        # self.driver.execute_query(update_query, entity_name=entity_name, summary=summary) #sd43372 commented
+                        session.execute_write(lambda tx: tx.run(update_query, entity_name=entity_name, summary=summary))
+
+                    print(f"✅ Updated {len(summaries)} entity summaries")
+                    logger.info(f"Updated {len(summaries)} entity summaries")
     
     # ==================== COMMUNITY DETECTION ====================
     
@@ -297,6 +331,7 @@ class AdvancedProcessingMixin:
         
         try:
             print(f"🔍 Running Leiden algorithm...")
+            logger.info("Running Leiden Algo...")
             
             # Run Leiden algorithm with GDS defaults (Neo4j LLM Graph Builder approach)
             # Note: Removed relationshipWeightProperty since relationships don't have weight property
@@ -310,7 +345,8 @@ class AdvancedProcessingMixin:
             levels_created = result.get('levels', max_levels)
             
             print(f"   ✅ Found {total_communities} communities across {levels_created} hierarchical levels")
-            
+            logger.info(f"Found {total_communities} communities across {levels_created} hierarchical levels")
+
             # Clean up projection
             try:
                 self.gds.graph.drop(projection_name)
@@ -319,6 +355,7 @@ class AdvancedProcessingMixin:
             
             if total_communities > 0:
                 print(f"✅ Community detection completed. Processing hierarchical structure...")
+                logger.info(f"Community detection completed. Processing hierarchical structure...")
                 
                 # Create community nodes with proper hierarchy
                 self.create_hierarchical_community_nodes(max_levels)
@@ -328,9 +365,11 @@ class AdvancedProcessingMixin:
                     self.generate_community_summaries_hierarchical(max_levels)
             else:
                 print("⚠️ No communities were created")
+                logger.error("No communities were created")
                 
         except Exception as e:
             print(f"⚠️ Error in Leiden algorithm: {e}")
+            logger.error(f"Error in Leiden algorithm: {e}")
             # Clean up projection on error
             try:
                 self.gds.graph.drop(projection_name)
@@ -554,7 +593,7 @@ class AdvancedProcessingMixin:
                 
                 print(f"     Found {len(communities)} communities to summarize at level {level}")
                 
-                # Generate summaries in batches with progress bar
+                # Generate summaries in batches
                 level_summaries = self._generate_community_summaries_batch(communities, level)
                 total_summaries += level_summaries
                 
@@ -568,12 +607,7 @@ class AdvancedProcessingMixin:
         """Generate summaries for a batch of communities"""
         summaries_created = 0
         
-        # Create progress bar for this level
-        progress_bar = tqdm(communities, desc=f"     Level {level} summaries", 
-                           unit="community", leave=False, 
-                           bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
-        
-        for community in progress_bar:
+        for community in communities:
             try:
                 community_id = community['community_id']
                 entities = community['entities']
@@ -591,6 +625,7 @@ class AdvancedProcessingMixin:
                 1. A descriptive title (2-4 words)
                 2. A comprehensive summary (2-3 sentences)
                 3. An importance rating (0-10) based on entity relationships and diversity
+                4. A brief explanation of the importance rating
                 
                 Entities in this community:
                 {entity_context}
@@ -599,7 +634,8 @@ class AdvancedProcessingMixin:
                 {{
                     "title": "Community Title",
                     "summary": "Detailed summary of the community's main themes and relationships",
-                    "rating": 7.5
+                    "rating": 7.5,
+                    "rating_explanation": "Explanation of why this rating was assigned"
                 }}
                 """
                 
@@ -624,7 +660,8 @@ class AdvancedProcessingMixin:
                         json_blocks = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE)
                         if json_blocks:
                             content = json_blocks[0]
-                    
+
+                    #logger.debug(f"Content: {content}")
                     summary_data = json.loads(content)
                     
                     # Update community with summary
@@ -633,6 +670,7 @@ class AdvancedProcessingMixin:
                     SET c.title = $title,
                         c.summary = $summary,
                         c.rating = $rating,
+                        c.rating_explanation = $rating_explanation,
                         c.summarized_at = datetime()
                     """
                     
@@ -641,24 +679,20 @@ class AdvancedProcessingMixin:
                         community_id=community_id,
                         title=summary_data.get('title', f'Community {community_id}'),
                         summary=summary_data.get('summary', 'No summary available'),
-                        rating=float(summary_data.get('rating', 5.0))
+                        rating=float(summary_data.get('rating', 5.0)),
+                        rating_explanation=summary_data.get('rating_explanation', 'No explanation provided')
                     )
-                    
                     summaries_created += 1
-                    # Update progress bar description with success count
-                    progress_bar.set_postfix({"✅": summaries_created})
                     
-                except json.JSONDecodeError:
-                    progress_bar.write(f"     ⚠️ Could not parse JSON response for community {community_id}")
+                except json.JSONDecodeError as e:
+                    print(f"Could not parse JSON response for community {community_id}")
+                    logger.error(f" Could not parse JSON response for community {community_id}: {e}")
                 except Exception as e:
-                    progress_bar.write(f"     ⚠️ Error generating summary for community {community_id}: {e}")
-                    
+                    print(f"Error generating summary for community {community_id}: {e}")
+                    logger.error(f"Error generating summary for community {community_id}: {e}")
             except Exception as e:
-                progress_bar.write(f"     ⚠️ Error processing community: {e}")
-        
-        # Close progress bar
-        progress_bar.close()
-        
+                print(f"Error processing community: {e}")
+                logger.error(f"Error processing community: {e}")
         return summaries_created
     
     def create_community_hierarchy(self):
@@ -762,6 +796,7 @@ class AdvancedProcessingMixin:
                         SET c.ai_summary = $summary,
                             c.title = $title,
                             c.importance_rating = $rating,
+                            c.rating_explanation = $rating_explanation,
                             c.summary_generated_at = datetime()
                         """
                         self.driver.execute_query(
@@ -769,7 +804,8 @@ class AdvancedProcessingMixin:
                             community_id=community_id,
                             summary=result['summary'],
                             title=result['title'],
-                            rating=result['rating']
+                            rating=result['rating'],
+                            rating_explanation=result['rating_explanation']
                         )
                         summaries_generated += 1
                 except Exception as e:
@@ -807,7 +843,8 @@ class AdvancedProcessingMixin:
             return {
                 "summary": result.summary,
                 "title": result.title,
-                "rating": result.rating
+                "rating": result.rating,
+                "rating_explanation": result.rating_explanation
             }
             
         except Exception as e:
@@ -954,6 +991,8 @@ class AdvancedProcessingMixin:
             print("\n✅ Advanced processing completed successfully!")
             
         except Exception as e:
+            import traceback
+            print(traceback.print_exc())
             print(f"\n❌ Error during advanced processing: {e}")
             results["status"] = "error"
             results["error"] = str(e)
@@ -962,8 +1001,10 @@ class AdvancedProcessingMixin:
     
     def get_graph_statistics(self) -> Dict[str, int]:
         """Get current graph statistics for cost estimation"""
+        #sd 43372
         stats_query = """
-        MATCH (e:Entity) WITH count(e) as entities
+        //MATCH (e:Entity) WITH count(e) as entities
+        MATCH (e:__Entity__) WITH count(e) as entities
         MATCH (c:Chunk) WITH entities, count(c) as chunks
         MATCH (d:Document) WITH entities, chunks, count(d) as documents
         MATCH ()-[r]->() WITH entities, chunks, documents, count(r) as relationships
@@ -973,16 +1014,18 @@ class AdvancedProcessingMixin:
         result = self.driver.execute_query(stats_query)
         if result.records:
             record = result.records[0]
-            return {
+            graph_stats =  {
                 "entities": record["entities"],
                 "chunks": record["chunks"],
                 "documents": record["documents"],
                 "relationships": record["relationships"]
             }
         else:
-            return {
+            graph_stats =  {
                 "entities": 0,
                 "chunks": 0,
                 "documents": 0,
                 "relationships": 0
             }
+        logger.debug(f"In get graph stats: {graph_stats}")
+        return graph_stats

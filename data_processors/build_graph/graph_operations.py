@@ -7,9 +7,22 @@ Supports configurable LLM models.
 import json
 import os
 import sys
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Type
+
+import neo4j
+from langchain_core.utils.json_schema import dereference_refs
 from neo4j import GraphDatabase
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from utils.graph_rag_logger import setup_logging, get_logger
+from dotenv import load_dotenv
+
+from utils.llms import get_vertex_llm, generate_dereferenced_schema
+
+load_dotenv()
+
+setup_logging()
+logger = get_logger(__name__)
 
 
 # Import centralized configuration
@@ -19,6 +32,7 @@ from config import get_llm
 # Pydantic models for structured LLM outputs
 class DuplicateEntities(BaseModel):
     duplicates: List[List[str]]
+    #duplicates: List[List[str]] = Field(default_factory=list, description="List of commonly grouped entities")
 
 class Disambiguate(BaseModel):
     canonical_name: str
@@ -36,8 +50,11 @@ class GraphOperationsMixin:
         neo4j_uri = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
         neo4j_user = os.environ.get('NEO4J_USERNAME', 'neo4j')
         neo4j_password = os.environ.get('NEO4J_PASSWORD', 'password')
-        
-        self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        neo4j_db = os.environ.get('CLIENT_NEO4J_DATABASE', 'neo4j_db')
+        self.neo4j_db = neo4j_db
+
+        logger.info(f'GraphDatabase driver setup. Database is: {neo4j_db}')
+        self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password), database=neo4j_db)
         
         # Use configurable LLM for entity resolution
         self.llm = get_llm()
@@ -51,7 +68,7 @@ class GraphOperationsMixin:
         Args:
             drop_schema (bool): If True, also drop all indexes, constraints, and vector indexes
         """
-        with self.driver.session() as session:
+        with self.driver.session(database=self.neo4j_db) as session:
             print("🗑️  Clearing Neo4j database...")
             
             # 1. Delete all nodes and relationships
@@ -61,6 +78,8 @@ class GraphOperationsMixin:
             if drop_schema:
                 # 2. Drop all vector indexes (this is crucial for dimension mismatches)
                 print("  - Dropping vector indexes...")
+                logger.info(f'GraphDatabase driver setup. Dropping vector indices')
+
                 try:
                     vector_indexes = session.run("SHOW INDEXES YIELD name, type WHERE type = 'VECTOR'").data()
                     for index in vector_indexes:
@@ -127,9 +146,14 @@ class GraphOperationsMixin:
     def setup_database_schema(self):
         """Set up Neo4j database schema with constraints and indexes."""
         # Get embedding dimensions from current model configuration
+        logger.debug("In setup_database_schema from GraphOperationsMixin")
         from config import get_embeddings
         embeddings_model = get_embeddings()
-        
+        logger.debug(f"Embeddings model: {embeddings_model}")
+        #logger.debug(f"Embeddings model name: {embeddings_model.model}")
+        if hasattr(embeddings_model, 'model_name'):
+            logger.debug(f"Embeddings model model_name: {embeddings_model.model_name}")
+
         # Determine vector dimensions based on embedding model
         if hasattr(embeddings_model, 'model') and 'nomic' in embeddings_model.model.lower():
             vector_dimensions = 768  # Ollama nomic-embed-text
@@ -137,6 +161,9 @@ class GraphOperationsMixin:
             vector_dimensions = 1536  # OpenAI text-embedding-3-small/large
         elif hasattr(embeddings_model, 'model') and 'ada-002' in embeddings_model.model:
             vector_dimensions = 1536  # OpenAI text-embedding-ada-002
+        elif hasattr(embeddings_model, 'model_name') and 'text-embedding-005' in embeddings_model.model_name:
+            logger.debug(f'In setup_database_schema: Return 768 dimension...')
+            vector_dimensions = 768  # VectorAI text-embedding-005
         else:
             # Test actual dimensions by generating a sample embedding
             try:
@@ -145,65 +172,100 @@ class GraphOperationsMixin:
                 print(f"🔍 Detected embedding dimensions: {vector_dimensions}")
             except Exception as e:
                 print(f"⚠️  Could not detect embedding dimensions, defaulting to 768: {e}")
+                logger.warning(f"Could not detect embedding dimensions, defaulting to 768: {e}")
                 vector_dimensions = 768
         
         print(f"📐 Setting up vector indexes with {vector_dimensions} dimensions")
         
-        with self.driver.session() as session:
+        with self.driver.session(database=self.neo4j_db) as session:
             # Create constraints for unique IDs
             constraints = [
                 "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE",
                 "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
-                "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE"
+                "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
+                "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:__Entity__) REQUIRE e.id IS UNIQUE"
             ]
             
             for constraint in constraints:
                 try:
                     session.run(constraint)
                 except Exception as e:
+                    import traceback
+                    logger.error(f"Unable to create constraint. {traceback.print_exc()}. Failed with exception {e}")
                     print(f"Constraint may already exist: {e}")
             
             # Create full-text search indexes
             indexes = [
                 "CREATE FULLTEXT INDEX entity_text_index IF NOT EXISTS FOR (e:Entity) ON EACH [e.text]",
+                "CREATE FULLTEXT INDEX chunk_text_index IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text]",
+                ## Added these from graph processor as retrievers are looking for it
                 "CREATE FULLTEXT INDEX entity_fulltext_idx IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name, e.description]",
-                "CREATE FULLTEXT INDEX chunk_text_index IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text]"
+                "CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text]"
             ]
             
             for index in indexes:
                 try:
                     session.run(index)
                 except Exception as e:
+                    import traceback
+                    logger.error(f"Unable to create  full-text search indexes. {traceback.print_exc()}. Failed with exception {e}")
                     print(f"Index may already exist: {e}")
             
-            # Create single unified vector index for all nodes with embeddings
+            # Create vector indexes for embeddings with dynamic dimensions
             vector_indexes = [
-                f"""
-                CREATE VECTOR INDEX embedding IF NOT EXISTS
-                FOR (n:__Entity__) ON (n.embedding)
-                OPTIONS {{indexConfig: {{
-                    `vector.dimensions`: {vector_dimensions},
+                """
+                CREATE VECTOR INDEX document_embeddings 
+                FOR (d:Document) ON (d.embedding)
+                OPTIONS {indexConfig: {
+                    `vector.dimensions`: 768,
                     `vector.similarity_function`: 'cosine'
-                }}}}
+                }}
+                """,
+                """
+                CREATE VECTOR INDEX chunk_embeddings 
+                FOR (c:Chunk) ON (c.embedding)
+                OPTIONS {indexConfig: {
+                    `vector.dimensions`: 768,
+                    `vector.similarity_function`: 'cosine'
+                }}
+                """,
+                """
+                CREATE VECTOR INDEX entity_embeddings_old
+                FOR (e:Entity) ON (e.embedding)
+                OPTIONS {indexConfig: {
+                    `vector.dimensions`: 768,
+                    `vector.similarity_function`: 'cosine'
+                }}
+                """,
+                """
+                CREATE VECTOR INDEX entity_embeddings
+                FOR (e:__Entity__) ON (e.embedding)
+                OPTIONS {indexConfig: {
+                    `vector.dimensions`: 768,
+                    `vector.similarity_function`: 'cosine'
+                }}
                 """
             ]
-            
-            # Note: Using single unified embedding index for simplicity
-            # All nodes (Document, Chunk, __Entity__) will use the same 'embedding' index
-            
+
             for index in vector_indexes:
                 try:
+                    logger.debug(f"Creating index: {index}.")
                     session.run(index)
                 except Exception as e:
-                    print(f"Vector index may already exist: {e}")
+                    import traceback
+                    logger.error(f"Unable to create index: {traceback.print_exc()}")
+                    logger.warning(f"Vector index may already exist: {e}")
+                    print(f"Vector index may already exist: {e}/Traceback: {traceback.print_exc()}")
         
         print("✅ Database schema setup complete")
+        logger.info("Database schema setup complete")
     
 
     
     def create_document_node(self, session, doc_id: str, doc_name: str, 
                            source_info: str, text: str, embedding: List[float]) -> str:
         """Create a document node in Neo4j."""
+        logger.info(f"Creating document node for doc_name: {doc_name}")
         session.run("""
             CREATE (d:Document {
                 id: $doc_id,
@@ -212,8 +274,7 @@ class GraphOperationsMixin:
                 embedding: $embedding,
                 created_at: datetime()
             })
-        """, doc_id=doc_id, doc_name=doc_name,
-            text=text[:1000], embedding=embedding)
+        """, doc_id=doc_id, doc_name=doc_name,  text=text, embedding=embedding) #text=text[:1000], embedding=embedding)
         
         return doc_id
     
@@ -266,13 +327,14 @@ class GraphOperationsMixin:
     def create_entity_nodes(self, session, entities_by_type: Dict[str, List[Dict[str, Any]]], 
                            doc_id: str) -> List[Tuple[str, str]]:
         """Create entity nodes and return list of (entity_id, entity_type) tuples."""
+        logger.debug(f'In create entity nodes')
         entity_ids = []
         
         for entity_type, entities in entities_by_type.items():
             for entity in entities:
                 entity_text = entity['text']
                 entity_id = f"entity_{entity_text.lower().replace(' ', '_')}_{entity_type.lower()}"
-                
+                logger.debug(f'Creating embedding for entity node: {entity_text}')
                 # Create embedding for entity
                 entity_embedding = self.create_embedding(
                     f"{entity_text} {entity.get('description', '')}"
@@ -283,15 +345,30 @@ class GraphOperationsMixin:
                     MERGE (e:Entity {{id: $entity_id}})
                     ON CREATE SET 
                         e.text = $entity_text,
+                        e.type = $entity_type,
                         e.description = $description,
                         e.embedding = $embedding,
                         e.created_at = datetime()
                     ON MATCH SET
                         e.description = CASE WHEN e.description = '' THEN $description ELSE e.description END
                 """, entity_id=entity_id, entity_text=entity_text, 
-                    description=entity.get('description', ''),
+                    entity_type=entity_type, description=entity.get('description', ''),
                     embedding=entity_embedding)
                 
+                # Create or update entity node #sd43372
+                session.run(f"""
+                    MERGE (e:__Entity__ {{id: $entity_id}})
+                    ON CREATE SET 
+                        e.text = $entity_text,
+                        e.entity_type = $entity_type,
+                        e.description = $description,
+                        e.embedding = $embedding,
+                        e.created_at = datetime()
+                    ON MATCH SET
+                        e.description = CASE WHEN e.description = '' THEN $description ELSE e.description END
+                """, entity_id=entity_id, entity_text=entity_text,
+                    entity_type=entity_type, description=entity.get('description', ''),
+                    embedding=entity_embedding)
                 # Add dynamic label to entity (using APOC if available, otherwise skip)
                 try:
                     session.run(f"""
@@ -300,13 +377,21 @@ class GraphOperationsMixin:
                         YIELD node
                         RETURN node
                     """, entity_id=entity_id, entity_type=entity_type)
+
+                    session.run(f"""
+                            MATCH (e:__Entity__ {{id: $entity_id}})
+                            CALL apoc.create.addLabels([e], [$entity_type])
+                            YIELD node
+                            RETURN node
+                    """, entity_id=entity_id, entity_type=entity_type)
+
                 except Exception:
                     # If APOC is not available, just continue without dynamic labels
                     pass
                 
-                # Link entity to document (kept for backward compatibility)
+                # Link entity to document (kept for backward compatibility) #sd43372
                 session.run("""
-                    MATCH (d:Document {id: $doc_id}), (e:Entity {id: $entity_id})
+                    MATCH (d:Document {id: $doc_id}), (e:__Entity__ {id: $entity_id})
                     MERGE (d)-[:MENTIONS]->(e)
                 """, doc_id=doc_id, entity_id=entity_id)
                 
@@ -317,6 +402,7 @@ class GraphOperationsMixin:
     def create_entity_nodes_for_chunk(self, session, entities_by_type: Dict[str, List[Dict[str, Any]]], 
                                     chunk_id: str, doc_id: str) -> List[Tuple[str, str]]:
         """Create entity nodes and link them to a specific chunk (aligned with original graph_processor.py)."""
+        logger.debug(f"create_entity_nodes_for_chunk....")
         entity_ids = []
         entity_counter = 0
         
@@ -327,26 +413,31 @@ class GraphOperationsMixin:
                 entity_description = entity.get('description', '')
                 
                 # Use same ID format as original: "{entity_type}_{entity_name}"
-                unique_id = f"{entity_type}_{entity_name}"
+                unique_id = f"{entity_type}_{entity_name.lower().strip().replace(' ', '_')}" #sd43372 - added lower/strip and replace
                 
                 # Create embedding for entity
                 embedding_text = f"{entity_name}: {entity_description}" if entity_description else entity_name
-                entity_embedding = self.create_embedding(embedding_text)
+                entity_embedding = self.create_embedding(embedding_text.lower()) #sd43372
                 
                 # Create or update entity node with both __Entity__ and dynamic labels (like original)
-                session.run(f"""
-                    MERGE (e:__Entity__ {{id: $unique_id}})
-                    ON CREATE SET e.name = $name, e.description = $description, e.embedding = $embedding,
-                                e:{entity_type}
-                    ON MATCH SET e.description = CASE WHEN e.description IS NULL THEN $description ELSE e.description END,
-                               e.embedding = CASE WHEN e.embedding IS NULL THEN $embedding ELSE e.embedding END
-                    WITH e
-                    MERGE (c:Chunk {{id: $chunk_id}})
-                    MERGE (c)-[:HAS_ENTITY]->(e)
-                """, unique_id=unique_id, name=entity_name, description=entity_description, 
-                    embedding=entity_embedding, chunk_id=chunk_id)
-                
-                entity_ids.append((entity_type, entity_name))
+                try:
+                    session.run(f"""
+                        MERGE (e:__Entity__ {{id: $unique_id}})
+                        ON CREATE SET e.name = $name, e.description = $description, e.embedding = $embedding,
+                                    e.entity_type = $entity_type, e.human_readable_id = $human_id,
+                                    e:{entity_type}
+                        ON MATCH SET e.description = CASE WHEN e.description IS NULL THEN $description ELSE e.description END,
+                                   e.embedding = CASE WHEN e.embedding IS NULL THEN $embedding ELSE e.embedding END,
+                                   e.human_readable_id = CASE WHEN e.human_readable_id IS NULL THEN $human_id ELSE e.human_readable_id END
+                        WITH e
+                        MERGE (c:Chunk {{id: $chunk_id}})
+                        MERGE (c)-[:HAS_ENTITY]->(e)
+                    """, unique_id=unique_id, name=entity_name, description=entity_description,
+                        embedding=entity_embedding, chunk_id=chunk_id, human_id=entity_counter, entity_type=entity_type)
+
+                    entity_ids.append((entity_type, entity_name))
+                except Exception as e:
+                    logger.error(f"Failed to create/update entity - {e}")
         
         return entity_ids
     
@@ -390,7 +481,7 @@ class GraphOperationsMixin:
         Only create relationships that are explicitly mentioned or strongly implied in the text.
         
         TEXT:
-        {chunk_text[:1000]}  # Limit text to prevent token overflow
+        {chunk_text} #[:1000]  # Limit text to prevent token overflow
         
         ENTITIES:
         {entities_text}
@@ -868,6 +959,7 @@ class GraphOperationsMixin:
     
     def entity_resolution(self, entities: List[str]) -> Optional[List[str]]:
         """Resolve duplicate entities using LLM analysis."""
+        logger.debug(f'In entity_resolution: {entities}')
         if len(entities) < 2:
             return None
         
@@ -886,12 +978,22 @@ class GraphOperationsMixin:
         
         Only include groups with 2+ entities. If no duplicates found, return {{"duplicates": []}}.
         """
+
+        DUP_SCHEMA = generate_dereferenced_schema(model=DuplicateEntities)
         
         try:
-            response = self.llm.invoke(prompt)
+            structure_llm = get_vertex_llm(
+                schema=DUP_SCHEMA,
+                system_prompt="You are an expert in analyzing entities and grouping them accordingly.",
+                response_type="application/json"
+            )
+            response = structure_llm.invoke(prompt)  #self.llm.invoke(prompt)
+            logger.debug(f"ER Response: {response}")
             result = json.loads(response.content)
             return result.get('duplicates', [])
         except Exception as e:
+            import traceback
+            logger.error(f"Entity resolution failed. Exception: {e}. Traceback\n: {traceback.print_exc()}")
             print(f"Warning: Entity resolution failed: {e}")
             return None
     
@@ -899,12 +1001,13 @@ class GraphOperationsMixin:
                                 word_edit_distance: int = 3, max_workers: int = 4):
         """Perform comprehensive entity resolution across the graph."""
         print("🔍 Starting entity resolution...")
+        logger.info(f"Starting entity resolution....")
         
         with self.driver.session() as session:
-            # Get all entities
+            # Get all entities #sd43372 changed from Entity to __Entity__, e.text to e.name
             result = session.run("""
-                MATCH (e:Entity)
-                RETURN e.id as id, e.text as text, e.type as type
+                MATCH (e:__Entity__)
+                RETURN e.id as id, e.name as text, e.entity_type as type
             """)
             
             entities_by_type = {}
@@ -925,13 +1028,16 @@ class GraphOperationsMixin:
                     continue
                 
                 print(f"🔍 Resolving {entity_type} entities ({len(entities)} entities)...")
+                logger.info(f"Resolving {entity_type} entities ({len(entities)} entities)...")
                 
                 # Use LLM for duplicate detection
                 entity_texts = [e['text'] for e in entities]
                 duplicates = self.entity_resolution(entity_texts)
+                logger.debug(f'Duplicates: {duplicates}')
                 
                 if duplicates:
                     for duplicate_group in duplicates:
+                        logger.debug(f'Dup Grp: {duplicate_group}')
                         if len(duplicate_group) >= 2:
                             # Find entity IDs for this group
                             entity_ids = []
@@ -945,43 +1051,56 @@ class GraphOperationsMixin:
                                 merged_count = self._merge_entities(session, entity_ids)
                                 total_merged += merged_count
             
-            print(f"✅ Entity resolution complete. Merged {total_merged} entities.")
+            print(f"Entity resolution complete. Merged {total_merged} entities.")
+            logger.info(f"Entity resolution complete. Merged {total_merged} entities.")
     
     def _merge_entities(self, session, entity_ids: List[str]) -> int:
         """Merge duplicate entities into the first one."""
+        logger.debug(f'Merging entities: {entity_ids}')
+        merged_entities = [] #sd43372
+
         if len(entity_ids) < 2:
             return 0
         
         primary_id = entity_ids[0]
+        logger.info(f'Primary Id: {primary_id}')
         duplicate_ids = entity_ids[1:]
+        logger.info(f'Duplicate Id: {duplicate_ids}')
         
         # Transfer all relationships to primary entity
         for dup_id in duplicate_ids:
             # Transfer incoming relationships
-            session.run("""
-                MATCH (n)-[r]->(e:Entity {id: $dup_id})
-                MATCH (primary:Entity {id: $primary_id})
-                CREATE (n)-[r2:RELATED_TO]->(primary)
-                SET r2 = properties(r)
-                DELETE r
-            """, dup_id=dup_id, primary_id=primary_id)
-            
-            # Transfer outgoing relationships
-            session.run("""
-                MATCH (e:Entity {id: $dup_id})-[r]->(n)
-                MATCH (primary:Entity {id: $primary_id})
-                CREATE (primary)-[r2:RELATED_TO]->(n)
-                SET r2 = properties(r)
-                DELETE r
-            """, dup_id=dup_id, primary_id=primary_id)
-            
-            # Delete duplicate entity
-            session.run("""
-                MATCH (e:Entity {id: $dup_id})
-                DELETE e
-            """, dup_id=dup_id)
-        
-        return len(duplicate_ids)
+            logger.debug(f"Duplicate Id: {dup_id}")
+            try: #Added try/catch so that process continues even if merging fails for some reason sd43372
+                session.run("""
+                    MATCH (n)-[r]->(e:__Entity__ {id: $dup_id})
+                    MATCH (primary:__Entity__ {id: $primary_id})
+                    CREATE (n)-[r2:RELATED_TO]->(primary)
+                    SET r2 = properties(r)
+                    DELETE r
+                """, dup_id=dup_id, primary_id=primary_id)
+
+                # Transfer outgoing relationships
+                session.run("""
+                    MATCH (e:__Entity__ {id: $dup_id})-[r]->(n)
+                    MATCH (primary:__Entity__ {id: $primary_id})
+                    CREATE (primary)-[r2:RELATED_TO]->(n)
+                    SET r2 = properties(r)
+                    DELETE r
+                """, dup_id=dup_id, primary_id=primary_id)
+
+                # Delete duplicate entity
+                logger.debug(f'Trying to delete entity with id : {dup_id}')
+                session.run("""
+                    MATCH (e:__Entity__ {id: $dup_id})
+                    DELETE e
+                """, dup_id=dup_id)
+                merged_entities.append(dup_id)
+            except neo4j.exceptions.ConstraintError as nec:
+                logger.error(f'Failed to delete node with duplicate id: {dup_id}. Primary id: {primary_id}')
+            except Exception as e:
+                logger.error(f'Failed to delete node with duplicate id: {dup_id}. Primary id: {primary_id}')
+        return len(merged_entities)
     
     def close(self):
         """Close the Neo4j driver."""

@@ -5,12 +5,10 @@ This module provides a query classifier specifically designed for the DRIFT syst
 to determine whether a query should use local (entity-focused) or global (community-focused) search.
 """
 
-from typing import Literal, Union
+from typing import Literal
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.language_models.base import BaseLanguageModel
 import logging
-
-from config.model_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +28,8 @@ class DRIFTQueryClassifier:
     - High-level overviews
     """
     
-    def __init__(self, llm: BaseLanguageModel = None):
-        self.llm = llm or get_llm()
+    def __init__(self, llm: ChatOpenAI):
+        self.llm = llm
         
         self.classification_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a query routing classifier for a DRIFT GraphRAG system. Your task is to classify queries as either LOCAL or GLOBAL search.
@@ -117,7 +115,7 @@ Respond with exactly one word: either "LOCAL" or "GLOBAL"."""),
             return "LOCAL"
 
 
-def create_drift_query_classifier(llm: BaseLanguageModel = None) -> DRIFTQueryClassifier:
+def create_drift_query_classifier(llm: ChatOpenAI) -> DRIFTQueryClassifier:
     """Factory function to create a DRIFTQueryClassifier instance."""
     return DRIFTQueryClassifier(llm)
 

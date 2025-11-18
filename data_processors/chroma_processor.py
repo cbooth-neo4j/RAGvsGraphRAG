@@ -2,18 +2,21 @@ import os
 from typing import List, Dict
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
+# from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
+# from langchain_openai import OpenAIEmbeddings
 from dotenv import load_dotenv
 import re
 import chromadb
 from chromadb.config import Settings
 import shutil
 
+from utils.llms import get_vertex_embeddings
+
 # Disable Chroma telemetry
 chromadb.Client(Settings(anonymized_telemetry=False))
 
-load_dotenv(override=True)
+load_dotenv()
 
 # Configure Chroma
 PERSIST_DIRECTORY = "chroma_db"
@@ -107,7 +110,7 @@ def create_vector_store(all_chunks: List[Dict[str, str]], collection_name: str) 
     if not all_chunks:
         raise ValueError("Cannot create vector store from empty chunks")
         
-    embeddings = OpenAIEmbeddings()
+    embeddings = get_vertex_embeddings() #OpenAIEmbeddings()
     
     # Extract texts and metadata
     texts = [chunk['content'] for chunk in all_chunks]

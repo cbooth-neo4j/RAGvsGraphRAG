@@ -14,37 +14,6 @@ python benchmark/ragas_benchmark.py --chroma --graphrag
 # Use custom benchmark data
 python benchmark/ragas_benchmark.py --all --jsonl path/to/benchmark.jsonl
 ```
-### **Retrieval Approaches**
-  --all                 Test all approaches
-  --chroma              Include ChromaDB RAG in testing
-  --graphrag            Include GraphRAG in testing
-  --text2cypher         Include Text2Cypher in testing
-  --advanced-graphrag   Include Advanced GraphRAG (intelligent global/local/hybrid) in testing
-  --drift-graphrag      Include DRIFT GraphRAG (iterative refinement) in testing
-  --neo4j-vector        Include Neo4j Vector RAG (pure vector similarity) in testing
-  --hybrid-cypher       Include Hybrid Cypher RAG (hybrid + generic neighborhood) in testing
-
-## 📁 Benchmark File Selection
-
-The benchmark system uses the following **priority order** for selecting evaluation data:
-
-1. **`--jsonl path/to/file.jsonl`** → Uses specified JSONL file (highest priority)
-2. **`--csv path/to/file.csv`** → Uses specified CSV file  
-3. **No file specified** → Uses default `benchmark/benchmark.csv` (18 questions)
-
-### **Examples:**
-```bash
-# Uses default benchmark.csv (18 questions)
-python benchmark/ragas_benchmark.py --hybrid-cypher
-
-# Uses your custom JSONL file (10 questions from nano pipeline)
-python benchmark/ragas_benchmark.py --hybrid-cypher --jsonl benchmark/ragbench__nano_benchmark.jsonl
-
-# Uses custom CSV file
-python benchmark/ragas_benchmark.py --all --csv my_custom_benchmark.csv
-```
-
-**⚠️ Important**: The approach flags (like `--hybrid-cypher`) only determine **which retriever to test**, not which benchmark file to use. File selection is controlled by `--csv` and `--jsonl` arguments.
 
 ## 📊 Evaluation Framework
 
@@ -52,6 +21,14 @@ python benchmark/ragas_benchmark.py --all --csv my_custom_benchmark.csv
 - **Context Recall**: How well retrieved context covers ground truth
 - **Faithfulness**: Whether response is grounded in retrieved context  
 - **Factual Correctness**: Accuracy of factual claims in response
+
+### **Retrieval Approaches Tested**
+1. **ChromaDB RAG** - Traditional vector similarity search
+2. **GraphRAG** - Multi-hop graph traversal with context enhancement
+3. **Advanced GraphRAG** - With community detection and summarization
+4. **Text2Cypher** - Natural language to Cypher query translation
+5. **Neo4j Vector** - Graph database vector search
+6. **Hybrid Cypher** - Combined vector + graph traversal
 
 ## 🧪 RAGBench Integration
 
@@ -161,3 +138,47 @@ python benchmark/ragas_benchmark.py --all --output-dir results/financial/
 python benchmark/ragas_benchmark.py --all --jsonl my_benchmark.jsonl
 ```
 
+## 📊 Interpreting Results
+
+### **Key Metrics to Watch**
+- **Context Recall > 0.8** - Good retrieval coverage
+- **Faithfulness > 0.9** - Responses stay grounded
+- **Factual Correctness > 0.7** - Accurate information
+
+### **Approach Comparisons**
+- **ChromaDB** - Fast, good for semantic similarity
+- **GraphRAG** - Better for complex, multi-hop questions
+- **Text2Cypher** - Excellent for structured data queries
+- **Hybrid** - Balanced performance across question types
+
+## 🔧 Troubleshooting
+
+### **Common Issues**
+- **No retrievers available**: Install retriever dependencies
+- **RAGAS import error**: Install ragas package
+- **Empty results**: Check if data was processed correctly
+- **API limits**: Reduce batch size or use rate limiting
+
+### **Performance Tips**
+- Start with **nano** preset for quick validation
+- Use **selective testing** during development
+- Run **full evaluation** only for final results
+- Monitor **API costs** with larger datasets
+
+## 🚀 Advanced Features
+
+### **Domain-Specific Evaluation**
+- Financial document analysis
+- Medical literature processing  
+- Legal document understanding
+- Technical specification parsing
+
+### **Custom Metrics**
+- Extend RAGAS with domain-specific metrics
+- Add retrieval latency measurements
+- Include cost-per-query analysis
+
+### **Batch Processing**
+- Process multiple presets automatically
+- Compare across different domains
+- Generate comparative reports

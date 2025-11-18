@@ -8,7 +8,17 @@ import os
 import sys
 from typing import List, Dict, Any
 from pathlib import Path
+
+from dotenv import load_dotenv
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+load_dotenv()
+
+from utils.graph_rag_logger import setup_logging, get_logger
+
+
+setup_logging()
+logger = get_logger(__name__)
 
 # Import centralized configuration
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -145,26 +155,34 @@ class TextProcessingMixin:
     
     def create_embedding(self, text: str) -> List[float]:
         """Create embedding for text using OpenAI."""
+        embed_dim = 768 if os.getenv('EMBEDDING_DIMENSION') is None else int(os.getenv('EMBEDDING_DIMENSION'))
+        logger.debug(f'Embed dim is {embed_dim}')
+
         try:
             # Truncate text if too long (OpenAI has token limits)
-            max_chars = 8000  # Conservative limit
+            max_chars = len(text) #8000  # Conservative limit
             if len(text) > max_chars:
                 text = text[:max_chars]
             
             embedding = self.embeddings.embed_query(text)
             return embedding
         except Exception as e:
+            logger.error(f"Failed to create embedding: {e}")
             print(f"Warning: Failed to create embedding: {e}")
             # Return zero vector as fallback
-            return [0.0] * 1536  # text-embedding-3-small dimension
+            return [0.0] * embed_dim  # text-embedding-3-small dimension
     
     def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Create embeddings for multiple texts efficiently."""
+        embed_dim = 768 if os.getenv('EMBEDDING_DIMENSION') is None else int(os.getenv('EMBEDDING_DIMENSION'))
+        logger.debug(f'Embed dim is {embed_dim}')
+
         try:
             # Truncate texts if too long
-            max_chars = 8000
+            # max_chars =  8000  #don't truncate..
             truncated_texts = []
             for text in texts:
+                max_chars = len(text)
                 if len(text) > max_chars:
                     truncated_texts.append(text[:max_chars])
                 else:
@@ -173,9 +191,10 @@ class TextProcessingMixin:
             embeddings = self.embeddings.embed_documents(truncated_texts)
             return embeddings
         except Exception as e:
+            logger.error(f"Failed to create embedding: {e}")
             print(f"Warning: Failed to create batch embeddings: {e}")
             # Return zero vectors as fallback
-            return [[0.0] * 1536 for _ in texts]
+            return [[0.0] * embed_dim for _ in texts]
     
     def prepare_documents_for_sampling(self, pdf_files: List[Path]) -> List[Dict[str, Any]]:
         """

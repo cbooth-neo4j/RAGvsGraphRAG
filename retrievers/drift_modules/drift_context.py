@@ -10,8 +10,8 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 import logging
 
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from config.model_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class DRIFTContextBuilder:
         Initialize context builder
         
         Args:
-            graph_processor: CustomGraphProcessor instance with Neo4j connection
+            graph_processor: AdvancedGraphProcessor instance with Neo4j connection
             config: Optional configuration for context building
         """
         self.graph = graph_processor
@@ -68,7 +68,7 @@ Communities:
 Select the most relevant communities (max {max_communities}).""")
         ])
         
-        self.llm = get_llm()
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
     
     async def build_context(
         self, 
