@@ -13,6 +13,12 @@ import sys
 import os
 os.environ['GRPC_DNS_RESOLVER'] = 'native'
 
+# Fix Windows console encoding for Unicode characters
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import argparse
 import asyncio
 from typing import List, Dict, Any
@@ -67,13 +73,13 @@ try:
     NEO4J_VECTOR_AVAILABLE = 'neo4j_vector' in available_retrievers
     HYBRID_CYPHER_AVAILABLE = 'hybrid_cypher' in available_retrievers
     
-    print("✅ Retrievers module imported successfully")
-    print(f"📋 Available retrievers: {list(available_retrievers.keys())}")
+    print("OK Retrievers module imported successfully")
+    print(f"Available retrievers: {list(available_retrievers.keys())}")
     
 except ImportError as e:
     import traceback
     print(traceback.print_exc())
-    print(f"❌ Error importing retrievers module: {e}")
+    print(f"ERROR importing retrievers module: {e}")
     print("   Please ensure the retrievers module is properly set up.")
     
     # Set all retrievers as unavailable if import fails
@@ -89,12 +95,12 @@ try:
     from config.model_factory import get_llm, get_embeddings
     from config.model_config import get_model_config
     
-    print("✅ Model configuration imported successfully")
+    print("OK Model configuration imported successfully")
     model_config = get_model_config()
-    print(f"🔧 LLM Provider: {model_config.llm_provider.value}")
-    print(f"🔧 LLM Model: {model_config.llm_model.value}")
-    print(f"🔧 Embedding Provider: {model_config.embedding_provider.value}")
-    print(f"🔧 Embedding Model: {model_config.embedding_model.value}")
+    print(f"LLM Provider: {model_config.llm_provider.value}")
+    print(f"LLM Model: {model_config.llm_model.value}")
+    print(f"Embedding Provider: {model_config.embedding_provider.value}")
+    print(f"Embedding Model: {model_config.embedding_model.value}")
     
     # Initialize LLM and embeddings for RAGAS using centralized configuration
     SEED = model_config.seed or 42
@@ -105,10 +111,10 @@ try:
     )
     embeddings = get_embeddings()
     
-    print("✅ RAGAS models initialized with centralized configuration")
+    print("OK RAGAS models initialized with centralized configuration")
     
 except ImportError as e:
-    print(f"⚠️  Could not import centralized model configuration: {e}")
+    print(f"WARNING: Could not import centralized model configuration: {e}")
     print("   Falling back to OpenAI models for RAGAS evaluation")
     
     # Fallback to OpenAI models
@@ -134,7 +140,7 @@ def load_benchmark_data(csv_path: str = "benchmark/benchmark.csv") -> List[Dict[
             'ground_truth': row['ground_truth']
         })
     
-    print(f"✅ Loaded {len(benchmark_data)} benchmark questions from CSV")
+    print(f"Loaded {len(benchmark_data)} benchmark questions from CSV")
     return benchmark_data
 
 def load_benchmark_data_jsonl(jsonl_path: str) -> List[Dict[str, str]]:
@@ -154,16 +160,16 @@ def load_benchmark_data_jsonl(jsonl_path: str) -> List[Dict[str, str]]:
                     'domain': record.get('domain')
                 })
             except json.JSONDecodeError as e:
-                print(f"⚠️  Skipping invalid JSON on line {line_num}: {e}")
+                print(f"WARNING: Skipping invalid JSON on line {line_num}: {e}")
     
-    print(f"✅ Loaded {len(benchmark_data)} benchmark questions from JSONL")
+    print(f"Loaded {len(benchmark_data)} benchmark questions from JSONL")
     return benchmark_data
 
 def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approach: str = "chroma") -> List[Dict[str, Any]]:
     """
     Collect evaluation data following RAGAS documentation pattern
     """
-    print(f"\n🔄 Collecting evaluation data for {approach.upper()} approach...")
+    print(f"\nCollecting evaluation data for {approach.upper()} approach...")
     
     dataset = []
     
@@ -245,7 +251,7 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             time.sleep(0.5)
             
         except Exception as e:
-            print(f"    ❌ Error processing question {i}: {e}")
+            print(f"    ERROR processing question {i}: {e}")
             # Add a failure record to maintain dataset consistency
             dataset.append({
                 "user_input": query,
@@ -256,14 +262,14 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                 "ground_truth": reference  # Also include ground_truth for RAGBench compatibility
             })
     
-    print(f"✅ Collected {len(dataset)} evaluation records for {approach.upper()}")
+    print(f"OK Collected {len(dataset)} evaluation records for {approach.upper()}")
     return dataset
 
 def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str) -> Dict[str, float]:
     """
     Evaluate the dataset using RAGAS following the documentation pattern
     """
-    print(f"\n📊 Evaluating {approach_name} using RAGAS metrics...")
+    print(f"\nEvaluating {approach_name} using RAGAS metrics...")
     
     # Force sequential processing to prevent parallel job timeouts
     os.environ['RAGAS_MAX_WORKERS'] = '1'
@@ -272,7 +278,7 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
     try:
         # Debug: Print first dataset item to check format
         if dataset:
-            print(f"   📋 Dataset sample format: {list(dataset[0].keys())}")
+            print(f"   Dataset sample format: {list(dataset[0].keys())}")
         
         # Create RAGAS evaluation dataset
         evaluation_dataset = EvaluationDataset.from_list(dataset)
@@ -282,13 +288,13 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
             import ragas
             # Set global timeout for RAGAS operations
             if hasattr(ragas, '_timeout'):
-                ragas._timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '120'))
+                ragas._timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '300'))
         except:
             pass
         
         # Prepare evaluator LLM with timeout configuration
-        #evaluator_llm = LangchainLLMWrapper(llm)
-        evaluator_llm = SyncOnlyWrapper(get_vertex_llm())
+        # Use the centralized LLM configuration instead of hardcoded VertexAI
+        evaluator_llm = LangchainLLMWrapper(llm)
         
         # Configure timeout for Ollama if needed
         timeout_attrs = ['timeout', 'request_timeout', 'read_timeout']
@@ -301,14 +307,14 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                 break
         
         if not timeout_found:
-            print("   ⚠️  No explicit timeout configured for LLM")
+            print("   WARNING: No explicit timeout configured for LLM")
             # Check environment variable as fallback
             env_timeout = os.getenv('OLLAMA_REQUEST_TIMEOUT')
             if env_timeout:
-                print(f"   📋 Environment timeout: {env_timeout}s")
+                print(f"   Environment timeout: {env_timeout}s")
         
         # Use basic metrics with timeout configuration
-        metric_timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '120'))  # 2 minutes per metric
+        metric_timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '300'))  # 5 minutes per metric
         
         metrics = [
             LLMContextRecall(),
@@ -327,7 +333,7 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         max_retries = int(os.getenv('RAGAS_MAX_RETRIES', '2'))
         for attempt in range(max_retries + 1):
             try:
-                print(f"   🔄 Evaluation attempt {attempt + 1}/{max_retries + 1}")
+                print(f"   Evaluation attempt {attempt + 1}/{max_retries + 1}")
                 # Add timeout wrapper around evaluation
                 import signal
                 import functools
@@ -396,8 +402,8 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                         else:
                             os.environ.pop('RAGAS_MAX_WORKERS', None)
                 
-                # Run with overall timeout (10 minutes)
-                overall_timeout = int(os.getenv('RAGAS_OVERALL_TIMEOUT', '600'))
+                # Run with overall timeout (15 minutes)
+                overall_timeout = int(os.getenv('RAGAS_OVERALL_TIMEOUT', '900'))
                 result = run_with_timeout(evaluation_func, overall_timeout)
                 break  # Success, exit retry loop
             except Exception as e:
@@ -406,8 +412,8 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                         print(f"   ⏱️  Timeout on attempt {attempt + 1}, retrying...")
                         continue
                     else:
-                        print(f"   ❌ All retry attempts failed due to timeout")
-                        print(f"   🔄 Attempting evaluation with reduced metrics...")
+                        print(f"   ERROR: All retry attempts failed due to timeout")
+                        print(f"   Attempting evaluation with reduced metrics...")
                         
                         # Try with just one metric as fallback
                         try:
@@ -418,21 +424,21 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                                 llm=evaluator_llm,
                                 raise_exceptions=False
                             )
-                            print(f"   ✅ Reduced metric evaluation succeeded")
+                            print(f"   OK Reduced metric evaluation succeeded")
                             break
                         except Exception as fallback_error:
-                            print(f"   ❌ Reduced metric evaluation also failed: {fallback_error}")
+                            print(f"   ERROR: Reduced metric evaluation also failed: {fallback_error}")
                             raise e
                 else:
                     # Non-timeout error, don't retry
                     raise e
         
-        print(f"✅ {approach_name} evaluation completed")
+        print(f"OK {approach_name} evaluation completed")
         
         # Convert result to dictionary format with correct metric names
         if hasattr(result, 'to_pandas'):
             df = result.to_pandas()
-            print(f"   📊 Raw DataFrame columns: {df.columns.tolist()}")
+            print(f"   Raw DataFrame columns: {df.columns.tolist()}")
             
             # Only calculate mean for numeric metric columns
             numeric_cols = []
@@ -450,16 +456,16 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                 for col in numeric_cols:
                     successful_samples = df[col].count()  # Non-NaN count
                     success_rate = successful_samples / total_samples
-                    print(f"   📊 {col}: {successful_samples}/{total_samples} samples ({success_rate:.1%} success)")
+                    print(f"   {col}: {successful_samples}/{total_samples} samples ({success_rate:.1%} success)")
                 
                 scores = df[numeric_cols].mean().to_dict()
-                print(f"   📊 Numeric scores: {scores}")
+                print(f"   Numeric scores: {scores}")
             else:
                 # Fallback: look for direct score attributes
                 scores = {}
                 if hasattr(result, 'binary_score'):
                     scores.update(result.binary_score)
-                print(f"   📊 Fallback scores: {scores}")
+                print(f"   Fallback scores: {scores}")
         else:
             scores = result
         
@@ -468,7 +474,7 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         
         # Ensure we have some scores
         if not scores:
-            print(f"   ⚠️  No scores found, using default values")
+            print(f"   WARNING: No scores found, using default values")
             return {
                 'context_recall': 0.0,
                 'faithfulness': 0.0,
@@ -492,16 +498,16 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                     mapped_scores[key.lower()] = numeric_value
                     
             except (ValueError, TypeError) as e:
-                print(f"   ⚠️  Could not convert {key}={value} to numeric: {e}")
+                print(f"   WARNING: Could not convert {key}={value} to numeric: {e}")
                 continue
         
-        print(f"   ✅ Final mapped scores: {mapped_scores}")
+        print(f"   Final mapped scores: {mapped_scores}")
         return mapped_scores
         
     except Exception as e:
-        print(f"❌ Error during {approach_name} evaluation: {e}")
+        print(f"ERROR during {approach_name} evaluation: {e}")
         import traceback
-        print(f"   🔍 Full error traceback:")
+        print(f"   Full error traceback:")
         traceback.print_exc()
         
         # Return default scores if evaluation fails
@@ -692,7 +698,7 @@ def save_results_simple(chroma_dataset: List, graphrag_dataset: List, text2cyphe
             }
         }, f, indent=2)
     
-    print(f"\n💾 Results saved to '{output_dir}/' folder:")
+    print(f"\nResults saved to '{output_dir}/' folder:")
     print("  - simple_benchmark_chroma.csv")
     print("  - simple_benchmark_graphrag.csv")
     print("  - simple_benchmark_text2cypher.csv") 
@@ -772,7 +778,7 @@ def create_detailed_reports(datasets: Dict, results: Dict, approaches: List[str]
         
         from results_formatter import RAGBenchResultsFormatter
         
-        print(f"\n📄 Creating detailed human-readable reports...")
+        print(f"\nCreating detailed human-readable reports...")
         
         # Initialize formatter
         formatter = RAGBenchResultsFormatter()
@@ -847,10 +853,10 @@ def create_detailed_reports(datasets: Dict, results: Dict, approaches: List[str]
         print(f"  - detailed_comparison.csv (detailed data)")
         
     except ImportError as e:
-        print(f"⚠️  Could not create detailed reports: {e}")
+        print(f"WARNING: Could not create detailed reports: {e}")
         print("   Detailed reporting requires the ragbench.results_formatter module")
     except Exception as e:
-        print(f"⚠️  Error creating detailed reports: {e}")
+        print(f"WARNING: Error creating detailed reports: {e}")
         import traceback
         traceback.print_exc()
 
@@ -963,7 +969,7 @@ Examples:
     
     # If no approaches specified, default to all
     if not approaches:
-        print("⚠️  No approaches specified. Defaulting to all available approaches.")
+        print("WARNING: No approaches specified. Defaulting to all available approaches.")
         default_approaches = ['chroma', 'graphrag', 'text2cypher']
         if ADVANCED_GRAPHRAG_AVAILABLE:
             default_approaches.append('advanced_graphrag')
@@ -993,7 +999,7 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs",
     
     selected_names = [approach_names[approach] for approach in approaches]
     
-    print(f"🚀 Starting Selective RAGAS Benchmark: {' vs '.join(selected_names)}")
+    print(f"Starting Selective RAGAS Benchmark: {' vs '.join(selected_names)}")
     print("=" * 80)
     
     # Load benchmark data (prefer JSONL over CSV)
@@ -1008,28 +1014,28 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs",
     if limit and limit > 0:
         original_count = len(benchmark_data)
         benchmark_data = benchmark_data[:limit]
-        print(f"🔢 Limited evaluation data from {original_count} to {len(benchmark_data)} samples")
+        print(f"Limited evaluation data from {original_count} to {len(benchmark_data)} samples")
     
     # Collect evaluation data for selected approaches
-    print(f"\n📋 Phase 1: Data Collection")
+    print(f"\nPhase 1: Data Collection")
     datasets = {}
     for approach in approaches:
         datasets[approach] = collect_evaluation_data_simple(benchmark_data, approach=approach)
     
     # Evaluate selected approaches with RAGAS
-    print(f"\n📊 Phase 2: RAGAS Evaluation")
+    print(f"\nPhase 2: RAGAS Evaluation")
     results = {}
     for approach in approaches:
         results[approach] = evaluate_with_ragas_simple(datasets[approach], approach_names[approach])
     
     # Create comparison table for selected approaches
-    print(f"\n📈 Phase 3: Results Analysis")
+    print(f"\nPhase 3: Results Analysis")
     
     if len(approaches) == 1:
         # Single approach - create simple results display
         approach = approaches[0]
         result = results[approach]
-        print(f"\n📊 Results for {approach_names[approach]}:")
+        print(f"\nResults for {approach_names[approach]}:")
         print("-" * 50)
         for metric, score in result.items():
             print(f"{metric.replace('_', ' ').title()}: {score:.4f}")
@@ -1055,12 +1061,12 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs",
     
     # Display results
     print(f"\n" + "=" * 90)
-    print(f"🏆 BENCHMARK RESULTS SUMMARY")
+    print(f"BENCHMARK RESULTS SUMMARY")
     print("=" * 90)
     print(comparison_table.to_string(index=False))
     
     # Calculate overall performance for selected approaches
-    print(f"\n📊 OVERALL PERFORMANCE SUMMARY:")
+    print(f"\nOVERALL PERFORMANCE SUMMARY:")
     print("-" * 50)
     
     averages = {}
@@ -1072,18 +1078,18 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs",
                     averages[col] = comparison_table[col].mean()
                     print(f"{col} Average Score: {averages[col]:.4f}")
             except (TypeError, ValueError):
-                print(f"⚠️  Skipping non-numeric column: {col}")
+                print(f"WARNING: Skipping non-numeric column: {col}")
                 continue
     
     # Determine overall winner
     if averages:
         winner = max(averages, key=averages.get)
         winner_score = averages[winner]
-        print(f"\n🏆 Overall Winner: {winner} (Score: {winner_score:.4f})")
+        print(f"\nOverall Winner: {winner} (Score: {winner_score:.4f})")
         
         # Show improvements if multiple approaches
         if len(approaches) > 1:
-            print(f"\n📈 Performance Comparisons:")
+            print(f"\nPerformance Comparisons:")
             baseline = list(averages.values())[0]
             baseline_name = list(averages.keys())[0]
             
@@ -1091,20 +1097,20 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs",
                 if name != baseline_name:
                     if score > baseline:
                         improvement = ((score - baseline) / baseline) * 100
-                        print(f"📈 {name} vs {baseline_name}: +{improvement:.2f}%")
+                        print(f"+ {name} vs {baseline_name}: +{improvement:.2f}%")
                     else:
                         decline = ((baseline - score) / baseline) * 100
-                        print(f"📉 {name} vs {baseline_name}: -{decline:.2f}%")
+                        print(f"- {name} vs {baseline_name}: -{decline:.2f}%")
     
     # Save detailed results
-    print(f"\n💾 Phase 4: Saving Results")
+    print(f"\nPhase 4: Saving Results")
     save_results_selective(datasets, results, comparison_table, approaches, output_dir)
     
     # Generate visualizations
-    print(f"\n📊 Phase 5: Generating Visualizations")
+    print(f"\nPhase 5: Generating Visualizations")
     create_visualizations(comparison_table)
     
-    print(f"\n✅ BENCHMARK COMPLETE!")
+    print(f"\nBENCHMARK COMPLETE!")
     print("=" * 80)
     
     return {
