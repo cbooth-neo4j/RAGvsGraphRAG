@@ -169,8 +169,38 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             'processing_status': 'completed'
         }
     
+    def prompt_for_mode(self) -> tuple[str, bool]:
+        """
+        Prompt user to choose processing mode at the start.
+        Returns (mode, run_advanced) where:
+        - mode: 'fresh' or 'add'
+        - run_advanced: whether to run advanced processing
+        """
+        print("\n" + "="*63)
+        print("[SETUP] Graph Processing Options")
+        print("="*63)
+        print("\nChoose processing mode:")
+        print("  1. Start fresh - Clear database and rebuild entire graph")
+        print("  2. Add advanced - Run advanced processing on existing graph")
+        print()
+        
+        while True:
+            response = input("[?] Select mode [1/2]: ").strip()
+            if response == '1':
+                # Start fresh - ask about advanced processing
+                print("\n[INFO] Will clear database and build new graph")
+                adv_response = input("\n[?] Run advanced processing after building graph? [y/N]: ").strip().lower()
+                return ('fresh', adv_response in ['y', 'yes'])
+            elif response == '2':
+                # Add advanced to existing
+                print("\n[INFO] Will run advanced processing on existing graph")
+                return ('add', True)
+            else:
+                print("[ERROR] Please enter '1' or '2'")
+    
     def process_directory(self, pdf_dir: str, perform_resolution: bool = True, 
-                         prompt_for_advanced: bool = True, auto_advanced: bool = False) -> Dict[str, Any]:
+                         prompt_for_advanced: bool = True, auto_advanced: bool = False,
+                         mode: str = 'fresh') -> Dict[str, Any]:
         """
         Process all PDF files in a directory.
         
@@ -179,10 +209,36 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             perform_resolution: Whether to perform entity resolution after processing
             prompt_for_advanced: Show interactive prompt for advanced processing (default True for CLI)
             auto_advanced: Auto-run advanced processing without prompt (backward compatibility)
+            mode: 'fresh' (default) or 'add' (skip doc processing, just run advanced)
             
         Returns:
             Overall processing statistics
         """
+        # If mode is 'add', skip document processing and just run advanced
+        if mode == 'add':
+            print("\n[ADD] Running advanced processing on existing graph...")
+            graph_stats = self.get_graph_statistics()
+            
+            print(f"\n[STATS] Current Graph:")
+            print(f"   - Documents: {graph_stats.get('document_count', 0):,}")
+            print(f"   - Chunks: {graph_stats.get('chunk_count', 0):,}")
+            print(f"   - Entities: {graph_stats.get('entity_count', 0):,}")
+            print(f"   - Relationships: {graph_stats.get('relationship_count', 0):,}")
+            
+            if graph_stats.get('entity_count', 0) == 0:
+                print("\n[WARNING] No entities found in graph. Please run fresh mode first.")
+                return {"status": "error", "message": "No entities in graph"}
+            
+            print("\n[*] Starting advanced processing...")
+            advanced_results = self.perform_advanced_processing(graph_stats)
+            
+            return {
+                "mode": "add",
+                "advanced_processing": advanced_results,
+                "status": "completed"
+            }
+        
+        # Normal 'fresh' mode - process documents
         logger.debug(f"Processing directory: {pdf_dir}. About to clear the Graph DB: {self.neo4j_db}")
         # Clear database first
         self.clear_database()
@@ -265,30 +321,20 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         logger.info(f"   Entity types: {len(summary['entity_types_discovered'])}")
         
         # Handle advanced processing based on parameters
+        # Note: prompt_for_advanced is now the pre-determined choice (True/False) not a flag
         graph_stats = self.get_graph_statistics()
         
-        if auto_advanced:
-            # Backward compatibility: auto-run without prompt
+        if auto_advanced or prompt_for_advanced:
+            # Run advanced processing (either auto or user said yes upfront)
             print(f"\n[ADVANCED] Starting advanced processing (summarization + community detection)...")
             logger.info(f"Starting advanced processing (summarization + community detection)...")
             advanced_results = self.perform_advanced_processing(graph_stats)
             summary["advanced_processing"] = advanced_results
-        elif prompt_for_advanced:
-            # Interactive prompt (default for CLI)
-            if self.prompt_for_advanced_processing(graph_stats):
-                print(f"\n[ADVANCED] Starting advanced processing...")
-                logger.info(f"Starting advanced processing (summarization + community detection)...")
-                advanced_results = self.perform_advanced_processing(graph_stats)
-                summary["advanced_processing"] = advanced_results
-            else:
-                print("\n[SKIP] Advanced processing skipped by user")
-                logger.info("Advanced processing skipped by user")
-                summary["advanced_processing"] = {"status": "skipped", "reason": "user_declined"}
         else:
-            # Skip advanced processing entirely
-            print("\n[SKIP] Advanced processing disabled")
-            logger.info("Advanced processing disabled")
-            summary["advanced_processing"] = {"status": "skipped", "reason": "disabled"}
+            # Skip advanced processing 
+            print("\n[SKIP] Advanced processing skipped")
+            logger.info("Advanced processing skipped by user")
+            summary["advanced_processing"] = {"status": "skipped", "reason": "user_declined"}
         
         return summary
     
@@ -298,7 +344,8 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                                  use_enhanced_discovery: bool = True,
                                  domain_hint: Optional[str] = None,
                                  prompt_for_advanced: bool = True,
-                                 auto_advanced: bool = False) -> Dict[str, Any]:
+                                 auto_advanced: bool = False,
+                                 mode: str = 'fresh') -> Dict[str, Any]:
         """
         Process RAGBench documents with enhanced entity discovery.
         
@@ -309,11 +356,36 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             domain_hint: Optional domain hint (e.g., 'financial', 'medical')
             prompt_for_advanced: Show interactive prompt for advanced processing (default True for CLI)
             auto_advanced: Auto-run advanced processing without prompt (backward compatibility)
+            mode: 'fresh' (default) or 'add' (skip doc processing, just run advanced)
             
         Returns:
             Processing statistics
         """
-        # Clear database first
+        # If mode is 'add', skip document processing and just run advanced
+        if mode == 'add':
+            print("\n[ADD] Running advanced processing on existing graph...")
+            graph_stats = self.get_graph_statistics()
+            
+            print(f"\n[STATS] Current Graph:")
+            print(f"   - Documents: {graph_stats.get('document_count', 0):,}")
+            print(f"   - Chunks: {graph_stats.get('chunk_count', 0):,}")
+            print(f"   - Entities: {graph_stats.get('entity_count', 0):,}")
+            print(f"   - Relationships: {graph_stats.get('relationship_count', 0):,}")
+            
+            if graph_stats.get('entity_count', 0) == 0:
+                print("\n[WARNING] No entities found in graph. Please run fresh mode first.")
+                return {"status": "error", "message": "No entities in graph"}
+            
+            print("\n[*] Starting advanced processing...")
+            advanced_results = self.perform_advanced_processing(graph_stats)
+            
+            return {
+                "mode": "add",
+                "advanced_processing": advanced_results,
+                "status": "completed"
+            }
+        
+        # Clear database first (fresh mode)
         self.clear_database()
         
         if len(texts) != len(sources):
@@ -386,29 +458,20 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         print(f"   Enhanced discovery: {use_enhanced_discovery}")
         
         # Handle advanced processing based on parameters
+        # Note: prompt_for_advanced is now the pre-determined choice (True/False) not a flag
         graph_stats = self.get_graph_statistics()
         
-        if auto_advanced:
-            # Backward compatibility: auto-run without prompt
+        if auto_advanced or prompt_for_advanced:
+            # Run advanced processing (either auto or user said yes upfront)
             print(f"\n[ADVANCED] Starting advanced processing (summarization + community detection)...")
+            logger.info(f"Starting advanced processing (summarization + community detection)...")
             advanced_results = self.perform_advanced_processing(graph_stats)
             summary["advanced_processing"] = advanced_results
-        elif prompt_for_advanced:
-            # Interactive prompt (default for CLI)
-            if self.prompt_for_advanced_processing(graph_stats):
-                print(f"\n[ADVANCED] Starting advanced processing...")
-                logger.info(f"Starting advanced processing (summarization + community detection)...")
-                advanced_results = self.perform_advanced_processing(graph_stats)
-                summary["advanced_processing"] = advanced_results
-            else:
-                print("\n[SKIP] Advanced processing skipped by user")
-                logger.info("Advanced processing skipped by user")
-                summary["advanced_processing"] = {"status": "skipped", "reason": "user_declined"}
         else:
-            # Skip advanced processing entirely
-            print("\n[SKIP] Advanced processing disabled")
-            logger.info("Advanced processing disabled")
-            summary["advanced_processing"] = {"status": "skipped", "reason": "disabled"}
+            # Skip advanced processing 
+            print("\n[SKIP] Advanced processing skipped")
+            logger.info("Advanced processing skipped by user")
+            summary["advanced_processing"] = {"status": "skipped", "reason": "user_declined"}
         
         return summary
     
@@ -418,28 +481,28 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         Returns True if user wants to proceed, False otherwise.
         """
         print("\n" + "="*63)
-        print("🎯 Basic graph construction complete!")
-        print("\n📊 Graph Statistics:")
-        print(f"   • Documents: {stats.get('document_count', 0):,}")
-        print(f"   • Chunks: {stats.get('chunk_count', 0):,}")
-        print(f"   • Entities: {stats.get('entity_count', 0):,}")
-        print(f"   • Relationships: {stats.get('relationship_count', 0):,}")
+        print("[*] Basic graph construction complete!")
+        print("\n[STATS] Graph Statistics:")
+        print(f"   - Documents: {stats.get('document_count', 0):,}")
+        print(f"   - Chunks: {stats.get('chunk_count', 0):,}")
+        print(f"   - Entities: {stats.get('entity_count', 0):,}")
+        print(f"   - Relationships: {stats.get('relationship_count', 0):,}")
         
         print("\n" + "="*63)
-        print("⚡ ADVANCED GRAPHRAG PROCESSING AVAILABLE")
+        print("[OPTION] ADVANCED GRAPHRAG PROCESSING AVAILABLE")
         print("\nThis enables:")
-        print("  ✓ Community detection (hierarchical clustering)")
-        print("  ✓ Element summarization (AI-generated descriptions)")
-        print("  ✓ Advanced retrievers (advanced_graphrag, drift_graphrag)")
+        print("  + Community detection (hierarchical clustering)")
+        print("  + Element summarization (AI-generated descriptions)")
+        print("  + Advanced retrievers (advanced_graphrag, drift_graphrag)")
         
-        print("\n⚠️  WARNING: This will take significant extra time and cost!")
-        print("   • Multiple LLM API calls for summarization")
-        print("   • Community detection algorithm processing")
-        print("   • May take 10-30+ minutes depending on graph size")
+        print("\n[WARNING] This will take significant extra time and cost!")
+        print("   - Multiple LLM API calls for summarization")
+        print("   - Community detection algorithm processing")
+        print("   - May take 10-30+ minutes depending on graph size")
         
-        print("\nℹ️  Current graph ready for basic retrievers (graph_rag, neo4j_vector, etc.)")
+        print("\n[INFO] Current graph ready for basic retrievers (graph_rag, neo4j_vector, etc.)")
         
-        response = input("\n❓ Run advanced processing? [y/N]: ").strip().lower()
+        response = input("\n[?] Run advanced processing? [y/N]: ").strip().lower()
         return response in ['y', 'yes']
     
     # Backward compatibility method

@@ -251,11 +251,18 @@ class GraphOperationsMixin:
                 try:
                     logger.debug(f"Creating index: {index}.")
                     session.run(index)
+                except neo4j.exceptions.ClientError as e:
+                    # Silently ignore "already exists" errors - this is expected on reruns
+                    if "EquivalentSchemaRuleAlreadyExists" in str(e):
+                        logger.debug(f"Vector index already exists (skipping): {e.code}")
+                    else:
+                        # Log actual errors
+                        logger.error(f"Unable to create vector index: {e}")
+                        raise
                 except Exception as e:
-                    import traceback
-                    logger.error(f"Unable to create index: {traceback.print_exc()}")
-                    logger.warning(f"Vector index may already exist: {e}")
-                    print(f"Vector index may already exist: {e}/Traceback: {traceback.print_exc()}")
+                    # Unexpected errors
+                    logger.error(f"Unexpected error creating index: {e}")
+                    raise
         
         print("[OK] Database schema setup complete")
         logger.info("Database schema setup complete")

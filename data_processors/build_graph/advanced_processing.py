@@ -957,7 +957,7 @@ class AdvancedProcessingMixin:
         Perform all advanced processing (element summarization + community detection).
         Note: User confirmation should be handled by caller (e.g., prompt_for_advanced_processing).
         """
-        print("🚀 Starting Advanced Graph Processing...")
+        print("[*] Starting Advanced Graph Processing...")
         
         # Get current stats if not provided
         if stats is None:
@@ -971,21 +971,21 @@ class AdvancedProcessingMixin:
         
         try:
             # Perform element summarization
-            print("\n📝 Starting element summarization...")
+            print("\n[*] Starting element summarization...")
             self.perform_element_summarization(summarize_entities=True)
             results["element_summarization"]["status"] = "completed"
             
             # Perform community detection
-            print("\n🏘️ Starting community detection...")
+            print("\n[*] Starting community detection...")
             self.perform_community_detection()
             results["community_detection"]["status"] = "completed"
             
-            print("\n✅ Advanced processing completed successfully!")
+            print("\n[OK] Advanced processing completed successfully!")
             
         except Exception as e:
             import traceback
             print(traceback.print_exc())
-            print(f"\n❌ Error during advanced processing: {e}")
+            print(f"\n[ERROR] Error during advanced processing: {e}")
             results["status"] = "error"
             results["error"] = str(e)
         
@@ -1007,17 +1007,17 @@ class AdvancedProcessingMixin:
         if result.records:
             record = result.records[0]
             graph_stats =  {
-                "entities": record["entities"],
-                "chunks": record["chunks"],
-                "documents": record["documents"],
-                "relationships": record["relationships"]
+                "entity_count": record["entities"],
+                "chunk_count": record["chunks"],
+                "document_count": record["documents"],
+                "relationship_count": record["relationships"]
             }
         else:
             graph_stats =  {
-                "entities": 0,
-                "chunks": 0,
-                "documents": 0,
-                "relationships": 0
+                "entity_count": 0,
+                "chunk_count": 0,
+                "document_count": 0,
+                "relationship_count": 0
             }
         logger.debug(f"In get graph stats: {graph_stats}")
         return graph_stats

@@ -8,6 +8,10 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Optional
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from utils.graph_rag_logger import setup_logging, get_logger
 from dotenv import load_dotenv
 
@@ -29,15 +33,22 @@ def process_pdfs(pdf_dir: str = "PDFs",
         if not Path(pdf_dir).exists():
             raise FileNotFoundError(f"PDF directory '{pdf_dir}' not found!")
         
-        print(f"[*] Processing PDFs from '{pdf_dir}' folder...")
+        # Prompt user for mode and advanced processing choice at the START
+        mode, run_advanced = processor.prompt_for_mode()
+        
+        print(f"\n[*] Processing PDFs from '{pdf_dir}' folder...")
+        print(f"   Mode: {mode}")
         print(f"   Enhanced discovery: {enhanced_discovery}")
         print(f"   Entity resolution: {perform_resolution}")
+        print(f"   Advanced processing: {run_advanced}")
         print("=" * 60)
         
         # Process all PDFs in the directory
         result = processor.process_directory(
             pdf_dir=pdf_dir,
-            perform_resolution=perform_resolution
+            perform_resolution=perform_resolution,
+            prompt_for_advanced=run_advanced,  # Now a boolean choice, not a flag
+            mode=mode
         )
         
         return result
@@ -89,6 +100,15 @@ def print_results_summary(result: dict, source_type: str):
     print("\n" + "=" * 60)
     print(f"[STATS] **{source_type.upper()} PROCESSING COMPLETE**")
     print("=" * 60)
+    
+    # Handle 'add' mode (just advanced processing)
+    if result.get('mode') == 'add':
+        print("[OK] Advanced processing completed on existing graph")
+        adv_result = result.get('advanced_processing', {})
+        if adv_result.get('status') == 'completed':
+            print("[INFO] Element summarization: Completed")
+            print("[INFO] Community detection: Completed")
+        return
     
     if source_type == "pdf":
         print(f"[OK] Documents processed: {result['successful_documents']}/{result['total_documents']}")
