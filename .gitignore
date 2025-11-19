@@ -51,6 +51,7 @@ Thumbs.db
 PDFs/
 !PDFs/.gitkeep
 benchmark_outputs/
+schema_cache.json
 
 # Byte-compiled / optimized / DLL files
 *.py[codz]
