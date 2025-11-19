@@ -160,8 +160,11 @@ class Neo4jVectorStore:
     
     def _setup_vector_index(self):
         """Create vector index for entities if it doesn't exist."""
-        embed_dim = 768 if os.getenv('EMBEDDING_DIMENSION') is None else int(os.getenv('EMBEDDING_DIMENSION'))
-        logger.debug(f'_setup_vector_index...Embed dim is {embed_dim}')
+        # Get embedding dimensions from model configuration
+        from config.model_config import get_model_config
+        model_config = get_model_config()
+        embed_dim = model_config.embedding_dimensions
+        logger.info(f'_setup_vector_index... Using {embed_dim} dimensions for {model_config.embedding_model.value}')
 
         try:
             with self.driver.session() as session:

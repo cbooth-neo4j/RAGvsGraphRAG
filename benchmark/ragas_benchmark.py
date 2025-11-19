@@ -24,6 +24,10 @@ import asyncio
 from typing import List, Dict, Any
 import warnings
 
+# Add parent directory to path so we can import from the main project
+# This MUST happen before importing from utils
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.llms import get_vertex_llm, SyncOnlyWrapper
 
 warnings.filterwarnings("ignore")
@@ -33,14 +37,9 @@ try:
     from .visualizations import create_visualizations
 except ImportError:
     # Fallback for when script is run directly
-    import sys
-    import os
     current_dir = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, current_dir)
     from visualizations import create_visualizations
-
-# Add parent directory to path so we can import from the main project
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # RAGAS imports
 from ragas import EvaluationDataset, evaluate

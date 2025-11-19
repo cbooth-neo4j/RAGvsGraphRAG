@@ -82,13 +82,26 @@ RAGvsGraphRAG/
 # Install dependencies
 pip install -r requirements.txt
 
-# Set up environment variables in .env file:
-NEO4J_URI=your_neo4j_uri
-NEO4J_USERNAME=your_username  
-NEO4J_PASSWORD=your_password
-OPENAI_API_KEY=your_openai_key
-OPENAI_MODEL_NAME=gpt-4o-mini  # Optional, defaults to gpt-4o-mini
+# Copy and configure .env file from template
+cp .env_example .env
+
+# Configure your settings in .env:
+# - Provider selection (openai, ollama, vertexai)
+# - Embedding model selection
+# - Neo4j connection details
+# - API keys as needed
+
+# See .env_example for all available options
 ```
+
+**⚠️ IMPORTANT**: Different embedding models produce different vector dimensions.
+- VertexAI/Ollama: 768 dimensions
+- OpenAI (small/ada-002): 1536 dimensions  
+- OpenAI (large): 3072 dimensions
+
+**You must use the same embedding model for data ingestion AND querying!**
+
+See [Embedding Dimensions Guide](docs/EMBEDDING_DIMENSIONS.md) for detailed information.
 
 ### 2. Start Neo4j Database
 ```bash
@@ -191,6 +204,7 @@ python benchmark/ragas_benchmark.py --hybrid-cypher --jsonl my.jsonl  # Uses cus
 - **[Retrievers](retrievers/README.md)** - Retrieval approaches and usage patterns
 - **[Benchmark](benchmark/README.md)** - Evaluation framework and RAGAS integration
 - **[RAGBench](benchmark/ragbench/README.md)** - RAGBench dataset integration details
+- **[Embedding Dimensions](docs/EMBEDDING_DIMENSIONS.md)** - ⚠️ **IMPORTANT**: Guide for handling different embedding models and dimensions
 
 ## 🛠️ Requirements
 

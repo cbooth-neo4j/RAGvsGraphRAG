@@ -142,7 +142,24 @@ class ModelConfig:
     
     @property
     def embedding_dimensions(self) -> int:
-        """Get the embedding dimensions for the selected model"""
+        """Get the embedding dimensions for the selected model
+        
+        Priority:
+        1. EMBEDDING_DIMENSION env var (manual override)
+        2. Model-specific default dimensions
+        3. Fallback to 768
+        """
+        # Check for manual override first
+        env_dimension = os.getenv('EMBEDDING_DIMENSION')
+        if env_dimension:
+            try:
+                dim = int(env_dimension)
+                logger.info(f"Using manually configured embedding dimension: {dim} (from EMBEDDING_DIMENSION env var)")
+                return dim
+            except ValueError:
+                logger.warning(f"Invalid EMBEDDING_DIMENSION value '{env_dimension}', using model default")
+        
+        # Use model-specific defaults
         dimension_mapping = {
             EmbeddingModel.OPENAI_TEXT_EMBEDDING_3_SMALL: 1536,
             EmbeddingModel.OPENAI_TEXT_EMBEDDING_3_LARGE: 3072,
@@ -150,8 +167,10 @@ class ModelConfig:
             EmbeddingModel.OLLAMA_NOMIC_TEXT_EMBED: 768,
             EmbeddingModel.VERTEXAI_TEXT_EMBEDDING_005: 768
         }
-        logger.debug(f"Embedding model: {self.embedding_model}")
-        return dimension_mapping.get(self.embedding_model, 768)
+        
+        default_dim = dimension_mapping.get(self.embedding_model, 768)
+        logger.info(f"Embedding model: {self.embedding_model.value}, dimensions: {default_dim}")
+        return default_dim
     
     def get_model_params(self) -> Dict[str, Any]:
         """Get model parameters as dictionary"""

@@ -31,7 +31,7 @@ NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 NEO4J_DATABASE = os.environ.get('CLIENT_NEO4J_DATABASE')
 
-INDEX_NAME = "chunk_embedding"  # Match the actual index name in Neo4j
+INDEX_NAME = "chunk_embeddings"  # Match the actual chunk vector index in Neo4j
 
 # Initialize components with centralized configuration
 SEED = 42
@@ -41,6 +41,8 @@ class GraphRAGRetriever:
     """GraphRAG retriever with Neo4j vector search and entity traversal"""
     
     def __init__(self):
+        from config.model_config import get_model_config
+        
         self.embeddings = get_neo4j_embeddings()
         self.llm = get_neo4j_llm()
         self.neo4j_uri = NEO4J_URI
@@ -48,7 +50,51 @@ class GraphRAGRetriever:
         self.neo4j_password = NEO4J_PASSWORD
         self.neo4j_db = NEO4J_DATABASE
         self.index_name = INDEX_NAME
-        logger.debug(f'GraphRAGRetriever initialized with index name: {INDEX_NAME} and db: {self.neo4j_db}')
+        
+        # Get expected embedding dimensions
+        model_config = get_model_config()
+        self.embedding_dim = model_config.embedding_dimensions
+        
+        logger.info(f'GraphRAGRetriever initialized:')
+        logger.info(f'  - Index: {INDEX_NAME}')
+        logger.info(f'  - Database: {self.neo4j_db}')
+        logger.info(f'  - Embedding Provider: {model_config.embedding_provider.value}')
+        logger.info(f'  - Embedding Model: {model_config.embedding_model.value}')
+        logger.info(f'  - Expected Dimensions: {self.embedding_dim}')
+        
+        # Validate dimensions match what's in Neo4j
+        self._validate_dimensions()
+    
+    def _validate_dimensions(self):
+        """Validate that embedding dimensions match Neo4j vector index configuration"""
+        try:
+            with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password), database=self.neo4j_db) as driver:
+                result = driver.execute_query(
+                    "SHOW INDEXES WHERE name = $index_name",
+                    index_name=self.index_name,
+                    database_=self.neo4j_db
+                )
+                
+                if result.records:
+                    index_info = result.records[0]
+                    # Try to extract dimensions from index options
+                    options = index_info.get('options', {})
+                    if options and 'indexConfig' in options:
+                        index_dim = options['indexConfig'].get('vector.dimensions')
+                        if index_dim and int(index_dim) != self.embedding_dim:
+                            logger.error(f"❌ DIMENSION MISMATCH!")
+                            logger.error(f"   Neo4j index '{self.index_name}' has {index_dim} dimensions")
+                            logger.error(f"   But embedding model produces {self.embedding_dim} dimensions")
+                            logger.error(f"   Fix: Run 'python scripts/setup_neo4j_indexes.py' to recreate indexes")
+                            print(f"⚠️  WARNING: Dimension mismatch detected!")
+                            print(f"   Neo4j: {index_dim} dims, Model: {self.embedding_dim} dims")
+                        else:
+                            logger.info(f"✅ Dimension validation passed: {self.embedding_dim} dimensions")
+                else:
+                    logger.warning(f"⚠️  Index '{self.index_name}' not found in Neo4j")
+                    print(f"⚠️  Vector index '{self.index_name}' not found. Run 'python scripts/setup_neo4j_indexes.py'")
+        except Exception as e:
+            logger.warning(f"Could not validate dimensions: {e}")
     
     def search(self, query: str, k: int = 3) -> Dict[str, Any]:
         """Neo4j GraphRAG query with LLM response generation"""

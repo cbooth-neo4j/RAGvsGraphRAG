@@ -30,7 +30,7 @@ NEO4J_USER = os.environ.get('NEO4J_USERNAME')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 NEO4J_DB = os.environ.get('CLIENT_NEO4J_DATABASE')
 
-INDEX_NAME = "chunk_embedding"
+INDEX_NAME = "chunk_embeddings"  # Match the actual chunk vector index in Neo4j
 
 # Initialize embeddings and LLM using centralized configuration
 SEED = 42
@@ -55,10 +55,20 @@ class Neo4jVectorRetriever:
             embedder: Embedding model (optional, will use default if not provided)
             llm_model: LLM model (optional, will use default if not provided)
         """
+        from config.model_config import get_model_config
+        
         self.driver = driver or GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD), database=NEO4J_DB)
         self.index_name = index_name
         self.embedder = embedder or embeddings
         self.llm_model = llm_model or llm
+        
+        # Get expected embedding dimensions
+        model_config = get_model_config()
+        self.embedding_dim = model_config.embedding_dimensions
+        
+        print(f"📊 Neo4j Vector Retriever Configuration:")
+        print(f"   Index: {index_name}")
+        print(f"   Embedding: {model_config.embedding_model.value} ({self.embedding_dim} dims)")
         
         # Initialize the vector retriever
         self.vector_retriever = VectorRetriever(
