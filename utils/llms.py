@@ -9,15 +9,12 @@ from dotenv import load_dotenv
 import os,subprocess
 
 from pydantic import BaseModel
+from langchain_core.utils.json_schema import dereference_refs
 
 # Optional VertexAI imports - only needed if using VertexAI provider
 try:
     from langchain_google_vertexai.chat_models import ChatVertexAI
     from langchain_google_vertexai.embeddings import VertexAIEmbeddings
-    try:
-        from langchain_core.utils.json_schema import dereference_refs
-    except ImportError:
-        dereference_refs = None
 
     import google
     from google.genai.types import ThinkingConfig, HttpOptions
@@ -39,7 +36,6 @@ except ImportError as e:
     # Create stub objects so the module can still be imported
     ChatVertexAI = None
     VertexAIEmbeddings = None
-    dereference_refs = None
     R2D2Environment = None
     VertexAIEnvironment = None
     coin_proxy_token_roller = None
