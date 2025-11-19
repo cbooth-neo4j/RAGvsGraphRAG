@@ -28,7 +28,7 @@ CLIENT_NEO4J_DATABASE = os.environ.get('CLIENT_NEO4J_DATABASE')
 
 
 # Index names for entity-focused hybrid search (Local Entity HybridCypherRetriever)
-VECTOR_INDEX_NAME = "entity_embedding"  # Vector index on __Entity__.embedding
+VECTOR_INDEX_NAME = "entity_embeddings"  # Vector index on __Entity__.embedding
 FULLTEXT_INDEX_NAME = "entity_fulltext_idx"  # Full-text index on __Entity__.name, description
 
 class HybridCypherRAGRetriever:
