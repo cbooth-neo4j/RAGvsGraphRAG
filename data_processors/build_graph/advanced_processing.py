@@ -82,7 +82,7 @@ class AdvancedProcessingMixin:
         batch_size = 10
         batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
         
-        print(f"📝 Processing {len(items)} entity summaries in {len(batches)} batches...")
+        print(f"[*] Processing {len(items)} entity summaries in {len(batches)} batches...")
         logger.info(f"Processing {len(items)} entity summaries in {len(batches)} batches...")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -103,7 +103,7 @@ class AdvancedProcessingMixin:
                     summaries.update(batch_summaries)
                 except Exception as e:
                     logger.error(f"Error processing batch {batch_idx}: {e}")
-                    print(f"⚠️ Error processing batch {batch_idx}: {e}")
+                    print(f"[WARNING] Error processing batch {batch_idx}: {e}")
         
         return summaries
     
@@ -118,7 +118,7 @@ class AdvancedProcessingMixin:
                 if summary:
                     batch_summaries[entity_name] = summary
             except Exception as e:
-                print(f"⚠️ Error summarizing entity {entity_name}: {e}")
+                print(f"[WARNING] Error summarizing entity {entity_name}: {e}")
                 logger.error(f"Error summarizing entity {entity_name}: {e}")
         return batch_summaries
     
@@ -152,7 +152,7 @@ class AdvancedProcessingMixin:
             })
             return result.summary
         except Exception as e:
-            print(f"⚠️ LLM error for entity {element_summary.name}: {e}")
+            print(f"[WARNING] LLM error for entity {element_summary.name}: {e}")
             logger.error(f"LLM error for entity {element_summary.name}: {e}")
             return None
 
@@ -161,10 +161,10 @@ class AdvancedProcessingMixin:
         Perform element summarization on entities and relationships
         """
         if not self.element_summarization_enabled:
-            print("⚠️ Element summarization is disabled")
+            print("[WARNING] Element summarization is disabled")
             return
             
-        print("🔍 Starting element summarization...")
+        print("[*] Starting element summarization...")
         
         if summarize_entities:
             # Get entities and their context
@@ -219,7 +219,7 @@ class AdvancedProcessingMixin:
 
                 # Update database
                 if summaries:
-                    print(f"💾 Updating {len(summaries)} entity descriptions...")
+                    print(f"[*] Updating {len(summaries)} entity descriptions...")
                     logger.info(f"Updating {len(summaries)} entity descriptions...")
                     for entity_name, summary in summaries.items():
                         update_query = """
@@ -238,7 +238,7 @@ class AdvancedProcessingMixin:
                         # self.driver.execute_query(update_query, entity_name=entity_name, summary=summary) #sd43372 commented
                         session.execute_write(lambda tx: tx.run(update_query, entity_name=entity_name, summary=summary))
 
-                    print(f"✅ Updated {len(summaries)} entity summaries")
+                    print(f"[OK] Updated {len(summaries)} entity summaries")
                     logger.info(f"Updated {len(summaries)} entity summaries")
     
     # ==================== COMMUNITY DETECTION ====================
@@ -248,7 +248,7 @@ class AdvancedProcessingMixin:
         Retry just the community detection step without running the full pipeline.
         Useful for debugging Leiden parameters after data is already processed.
         """
-        print("🔄 Retrying community detection on existing graph...")
+        print("[*] Retrying community detection on existing graph...")
         
         # Check if we have entities
         with self.driver.session() as session:
@@ -256,13 +256,13 @@ class AdvancedProcessingMixin:
             entity_count = result.single()['count']
             
             if entity_count == 0:
-                print("❌ No entities found. Run data processing first.")
+                print("[ERROR] No entities found. Run data processing first.")
                 return
                 
-            print(f"📊 Found {entity_count} entities to cluster")
+            print(f"[INFO] Found {entity_count} entities to cluster")
             
             # Clear existing communities first
-            print("🗑️ Clearing existing communities...")
+            print("[*] Clearing existing communities...")
             session.run("MATCH (c:__Community__) DETACH DELETE c")
         
         # Run community detection
@@ -273,7 +273,7 @@ class AdvancedProcessingMixin:
         Retry just the community summarization step.
         Useful when communities exist but summaries failed.
         """
-        print("🔄 Retrying community summarization...")
+        print("[*] Retrying community summarization...")
         
         # Check if we have communities
         with self.driver.session() as session:
@@ -281,26 +281,26 @@ class AdvancedProcessingMixin:
             community_count = result.single()['count']
             
             if community_count == 0:
-                print("❌ No communities found. Run community detection first.")
-                print("💡 Try: processor.retry_community_detection_only()")
+                print("[ERROR] No communities found. Run community detection first.")
+                print("[HELP] Try: processor.retry_community_detection_only()")
                 return
                 
-            print(f"📊 Found {community_count} communities to summarize")
+            print(f"[INFO] Found {community_count} communities to summarize")
         
         # Run community summarization
         if self.community_summarization_enabled:
             summaries_created = self.generate_community_summaries_hierarchical(max_levels)
-            print(f"✅ Created {summaries_created} community summaries")
+            print(f"[OK] Created {summaries_created} community summaries")
         else:
-            print("⚠️ Community summarization is disabled")
-            print("💡 Enable with: processor.community_summarization_enabled = True")
+            print("[WARNING] Community summarization is disabled")
+            print("[HELP] Enable with: processor.community_summarization_enabled = True")
     
     def perform_community_detection(self, max_levels: int = 3):
         """
         Perform community detection using GDS Leiden algorithm (Neo4j LLM Graph Builder approach).
         Let GDS handle the heavy lifting with default parameters - no custom min_community_size.
         """
-        print("🏘️ Starting hierarchical community detection...")
+        print("[*] Starting hierarchical community detection...")
         
         # Ensure GDS is available
         if not hasattr(self, 'gds') or self.gds is None:
@@ -324,13 +324,13 @@ class AdvancedProcessingMixin:
                     "RELATED_TO": {"orientation": "UNDIRECTED"}  # Use the actual relationship type that exists
                 }
             )
-            print(f"📊 Created graph projection with {G.node_count()} nodes and {G.relationship_count()} relationships")
+            print(f"[INFO] Created graph projection with {G.node_count()} nodes and {G.relationship_count()} relationships")
         except Exception as e:
-            print(f"⚠️ Error creating graph projection: {e}")
+            print(f"[WARNING] Error creating graph projection: {e}")
             return
         
         try:
-            print(f"🔍 Running Leiden algorithm...")
+            print(f"[*] Running Leiden algorithm...")
             logger.info("Running Leiden Algo...")
             
             # Run Leiden algorithm with GDS defaults (Neo4j LLM Graph Builder approach)
@@ -344,7 +344,7 @@ class AdvancedProcessingMixin:
             total_communities = result['communityCount']
             levels_created = result.get('levels', max_levels)
             
-            print(f"   ✅ Found {total_communities} communities across {levels_created} hierarchical levels")
+            print(f"   [OK] Found {total_communities} communities across {levels_created} hierarchical levels")
             logger.info(f"Found {total_communities} communities across {levels_created} hierarchical levels")
 
             # Clean up projection
@@ -354,7 +354,7 @@ class AdvancedProcessingMixin:
                 pass
             
             if total_communities > 0:
-                print(f"✅ Community detection completed. Processing hierarchical structure...")
+                print(f"[OK] Community detection completed. Processing hierarchical structure...")
                 logger.info(f"Community detection completed. Processing hierarchical structure...")
                 
                 # Create community nodes with proper hierarchy
@@ -364,11 +364,11 @@ class AdvancedProcessingMixin:
                 if self.community_summarization_enabled:
                     self.generate_community_summaries_hierarchical(max_levels)
             else:
-                print("⚠️ No communities were created")
+                print("[WARNING] No communities were created")
                 logger.error("No communities were created")
                 
         except Exception as e:
-            print(f"⚠️ Error in Leiden algorithm: {e}")
+            print(f"[WARNING] Error in Leiden algorithm: {e}")
             logger.error(f"Error in Leiden algorithm: {e}")
             # Clean up projection on error
             try:
@@ -378,7 +378,7 @@ class AdvancedProcessingMixin:
     
     def create_hierarchical_community_nodes(self, max_levels: int):
         """Create hierarchical Community nodes based on official Neo4j GraphRAG approach"""
-        print("🏗️ Creating hierarchical community nodes and relationships...")
+        print("[*] Creating hierarchical community nodes and relationships...")
         
         # Use the official Neo4j GraphRAG approach from their blog post
         # Reference: https://neo4j.com/blog/developer/global-graphrag-neo4j-langchain/
@@ -395,10 +395,10 @@ class AdvancedProcessingMixin:
             result = session.run(check_query)
             record = result.single()
             if record['entities_with_communities'] == 0:
-                print("   ⚠️ No entities have communityId property - Leiden algorithm may have failed")
+                print("   [WARNING] No entities have communityId property - Leiden algorithm may have failed")
                 return
-            print(f"   📊 Found {record['entities_with_communities']} entities with community assignments")
-            print(f"   📋 Sample community IDs: {record['sample_community_ids']}")
+            print(f"   [INFO] Found {record['entities_with_communities']} entities with community assignments")
+            print(f"   [INFO] Sample community IDs: {record['sample_community_ids']}")
         
         # Official Neo4j GraphRAG community materialization approach
         # Split into separate queries to avoid Cypher CALL subquery limitations
@@ -428,24 +428,24 @@ class AdvancedProcessingMixin:
         try:
             # Execute level 0 community creation
             result1 = self.driver.execute_query(level_0_query)
-            print("   ✅ Created level 0 communities and entity connections")
+            print("   [OK] Created level 0 communities and entity connections")
             
             # Execute hierarchy creation
             result2 = self.driver.execute_query(hierarchy_query)
-            print("   ✅ Created hierarchical community structure")
+            print("   [OK] Created hierarchical community structure")
             
         except Exception as e:
-            print(f"   ⚠️ Error creating communities: {e}")
+            print(f"   [WARNING] Error creating communities: {e}")
             return
         
         # Add community ranking based on document mentions (Neo4j GraphRAG approach)
         self.add_community_ranking()
         
-        print("✅ Hierarchical community nodes and relationships created")
+        print("[OK] Hierarchical community nodes and relationships created")
     
     def add_community_ranking(self):
         """Add community ranking based on document mentions (Neo4j GraphRAG approach)"""
-        print("📊 Adding community ranking...")
+        print("[*] Adding community ranking...")
         
         try:
             # First, rank level 0 communities based on chunk connections (Neo4j LLM Graph Builder approach)
@@ -458,7 +458,7 @@ class AdvancedProcessingMixin:
             """
             
             result1 = self.driver.execute_query(level_0_ranking_query)
-            print("   ✅ Level 0 community rankings assigned")
+            print("   [OK] Level 0 community rankings assigned")
             
             # Then, rank higher level communities level by level to avoid race conditions
             # Process each level sequentially so inheritance works correctly
@@ -472,14 +472,14 @@ class AdvancedProcessingMixin:
                 """
                 
                 result = self.driver.execute_query(level_ranking_query)
-                print(f"   ✅ Level {level} community rankings inherited from children")
+                print(f"   [OK] Level {level} community rankings inherited from children")
             
         except Exception as e:
-            print(f"   ⚠️ Error adding community ranking: {e}")
+            print(f"   [WARNING] Error adding community ranking: {e}")
     
     def create_community_hierarchy_proper(self, max_levels: int):
         """Create proper hierarchical relationships between community levels (Neo4j LLM Graph Builder style)"""
-        print("🔗 Creating proper community hierarchy...")
+        print("[*] Creating proper community hierarchy...")
         
         # The key insight: Leiden with includeIntermediateCommunities creates a hierarchical structure
         # where higher levels are aggregations of lower levels
@@ -515,9 +515,9 @@ class AdvancedProcessingMixin:
         
         try:
             result = self.driver.execute_query(hierarchy_query, max_levels=max_levels)
-            print("   ✅ Created hierarchical community structure based on Leiden results")
+            print("   [OK] Created hierarchical community structure based on Leiden results")
         except Exception as e:
-            print(f"   ⚠️ Error creating community hierarchy: {e}")
+            print(f"   [WARNING] Error creating community hierarchy: {e}")
         
         # Add community ranking and weights
         ranking_query = """
@@ -534,19 +534,19 @@ class AdvancedProcessingMixin:
         
         try:
             self.driver.execute_query(ranking_query)
-            print("   ✅ Community ranking and weights assigned")
+            print("   [OK] Community ranking and weights assigned")
         except Exception as e:
-            print(f"   ⚠️ Error assigning community rankings: {e}")
+            print(f"   [WARNING] Error assigning community rankings: {e}")
         
-        print("✅ Proper community hierarchy created successfully")
+        print("[OK] Proper community hierarchy created successfully")
     
     def generate_community_summaries_hierarchical(self, max_levels: int) -> int:
         """Generate AI summaries for hierarchical communities (Neo4j LLM Graph Builder style)"""
         if not self.community_summarization_enabled:
-            print("⚠️ Community summarization is disabled")
+            print("[WARNING] Community summarization is disabled")
             return 0
         
-        print("📝 Generating hierarchical community summaries...")
+        print("[*] Generating hierarchical community summaries...")
         
         total_summaries = 0
         
@@ -598,9 +598,9 @@ class AdvancedProcessingMixin:
                 total_summaries += level_summaries
                 
             except Exception as e:
-                print(f"     ⚠️ Error processing level {level}: {e}")
+                print(f"     [WARNING] Error processing level {level}: {e}")
         
-        print(f"✅ Generated {total_summaries} community summaries across {max_levels} levels")
+        print(f"[OK] Generated {total_summaries} community summaries across {max_levels} levels")
         return total_summaries
     
     def _generate_community_summaries_batch(self, communities: list, level: int) -> int:
@@ -697,7 +697,7 @@ class AdvancedProcessingMixin:
     
     def create_community_hierarchy(self):
         """Create hierarchical relationships between community levels (Neo4j LLM Graph Builder style)"""
-        print("🔗 Creating community hierarchy...")
+        print("[*] Creating community hierarchy...")
         
         # Create parent-child relationships between community levels
         hierarchy_query = """
@@ -740,10 +740,10 @@ class AdvancedProcessingMixin:
     def generate_community_summaries(self, max_levels: List[int] = [0, 1, 2], min_community_size: int = 2) -> int:
         """Generate AI summaries for detected communities"""
         if not self.community_summarization_enabled:
-            print("⚠️ Community summarization is disabled")
+            print("[WARNING] Community summarization is disabled")
             return 0
             
-        print("📝 Generating community summaries...")
+        print("[*] Generating community summaries...")
         
         # Get communities that need summaries
         communities_query = """
@@ -768,7 +768,7 @@ class AdvancedProcessingMixin:
             print("ℹ️ No communities need summaries")
             return 0
         
-        print(f"📊 Processing {len(communities)} communities...")
+        print(f"[INFO] Processing {len(communities)} communities...")
         
         summaries_generated = 0
         
@@ -809,9 +809,9 @@ class AdvancedProcessingMixin:
                         )
                         summaries_generated += 1
                 except Exception as e:
-                    print(f"⚠️ Error processing community {community_id}: {e}")
+                    print(f"[WARNING] Error processing community {community_id}: {e}")
         
-        print(f"✅ Generated {summaries_generated} community summaries")
+        print(f"[OK] Generated {summaries_generated} community summaries")
         return summaries_generated
     
     def _process_community(self, community_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -848,7 +848,7 @@ class AdvancedProcessingMixin:
             }
             
         except Exception as e:
-            print(f"⚠️ Error generating summary for community {community_data['community_id']}: {e}")
+            print(f"[WARNING] Error generating summary for community {community_data['community_id']}: {e}")
             return None
     
     def _prepare_community_string(self, data: Dict[str, Any]) -> str:
@@ -918,27 +918,27 @@ class AdvancedProcessingMixin:
         """Get user confirmation before proceeding with costly operations"""
         
         print("\n" + "="*60)
-        print("💰 ADVANCED PROCESSING COST ESTIMATE")
+        print("[COST] ADVANCED PROCESSING COST ESTIMATE")
         print("="*60)
         
         entity_info = costs["entity_summarization"]
         community_info = costs["community_detection"]
         
-        print(f"📝 Entity Summarization:")
+        print(f"[INFO] Entity Summarization:")
         print(f"   • {entity_info['entities']} entities to summarize")
         print(f"   • ~{entity_info['estimated_tokens']:,} tokens")
         print(f"   • ~${entity_info['estimated_cost']:.4f}")
         
-        print(f"\n🏘️ Community Detection & Summarization:")
+        print(f"\n[INFO] Community Detection & Summarization:")
         print(f"   • ~{community_info['estimated_communities']} communities expected")
         print(f"   • ~{community_info['estimated_tokens']:,} tokens")
         print(f"   • ~${community_info['estimated_cost']:.4f}")
         
-        print(f"\n💸 TOTAL ESTIMATED COST: ${costs['total_estimated_cost']:.4f}")
+        print(f"\n[COST] TOTAL ESTIMATED COST: ${costs['total_estimated_cost']:.4f}")
         print("="*60)
         
         if costs['total_estimated_cost'] < 0.10:  # Auto-approve small costs
-            print("✅ Cost is minimal, proceeding automatically...")
+            print("[OK] Cost is minimal, proceeding automatically...")
             return True
         
         while True:
@@ -954,7 +954,8 @@ class AdvancedProcessingMixin:
     
     def perform_advanced_processing(self, stats: Dict[str, int] = None) -> Dict[str, Any]:
         """
-        Perform all advanced processing with cost estimation and user confirmation
+        Perform all advanced processing (element summarization + community detection).
+        Note: User confirmation should be handled by caller (e.g., prompt_for_advanced_processing).
         """
         print("🚀 Starting Advanced Graph Processing...")
         
@@ -962,24 +963,15 @@ class AdvancedProcessingMixin:
         if stats is None:
             stats = self.get_graph_statistics()
         
-        # Estimate costs
-        costs = self.estimate_processing_costs(stats)
-        
-        # Get user confirmation
-        if not self.get_user_confirmation_for_costs(costs):
-            print("❌ Advanced processing cancelled by user")
-            return {"status": "cancelled", "reason": "user_declined"}
-        
         results = {
             "status": "completed",
-            "costs": costs,
             "element_summarization": {},
             "community_detection": {}
         }
         
         try:
             # Perform element summarization
-            print("\n🔍 Starting element summarization...")
+            print("\n📝 Starting element summarization...")
             self.perform_element_summarization(summarize_entities=True)
             results["element_summarization"]["status"] = "completed"
             

@@ -38,6 +38,10 @@ class SimpleRAGBenchIngester:
         
         self.evaluation_cache = []
     
+    def run_preset(self, preset_name: str) -> Dict[str, Any]:
+        """Run a predefined ingestion preset (alias for load_and_process_preset)"""
+        return self.load_and_process_preset(preset_name)
+    
     def load_and_process_preset(self, preset_name: str) -> Dict[str, Any]:
         """Load RAGBench data and process through graph processor"""
         
@@ -46,7 +50,7 @@ class SimpleRAGBenchIngester:
         
         config = INGESTION_PRESETS[preset_name]
         
-        print(f"🚀 Running RAGBench preset: {preset_name}")
+        print(f"[*] Running RAGBench preset: {preset_name}")
         print(f"   {config['description']}")
         
         # Step 1: Load RAGBench data
@@ -107,7 +111,7 @@ class SimpleRAGBenchIngester:
     def load_and_process_custom(self, datasets: List[str], records_per_dataset: int = 50) -> Dict[str, Any]:
         """Load and process custom dataset selection"""
         
-        print(f"🚀 Processing custom RAGBench datasets: {', '.join(datasets)}")
+        print(f"[*] Processing custom RAGBench datasets: {', '.join(datasets)}")
         print(f"   Records per dataset: {records_per_dataset}")
         
         # Step 1: Load data from specified datasets
@@ -120,7 +124,7 @@ class SimpleRAGBenchIngester:
                 sampling="first"
             )
             all_records.extend(records)
-            print(f"   ✅ Loaded {len(records)} records from {dataset_name}")
+            print(f"   [OK] Loaded {len(records)} records from {dataset_name}")
         
         # Step 2: Cache Q&A pairs for evaluation first
         for record_idx, record in enumerate(all_records):
@@ -184,7 +188,7 @@ class SimpleRAGBenchIngester:
         elif isinstance(dataset_names, str):
             dataset_names = [dataset_names]
         
-        print(f"📥 Loading RAGBench datasets: {dataset_names}")
+        print(f"[*] Loading RAGBench datasets: {dataset_names}")
         
         all_records = []
         for dataset_name in dataset_names:
@@ -210,9 +214,9 @@ class SimpleRAGBenchIngester:
                         break
                 
                 all_records.extend(records)
-                print(f"   ✅ Loaded {len(records)} records from {dataset_name}")
+                print(f"   [OK] Loaded {len(records)} records from {dataset_name}")
             except Exception as e:
-                print(f"   ❌ Error loading {dataset_name}: {e}")
+                print(f"   [ERROR] Error loading {dataset_name}: {e}")
                 print(f"       Trying alternative loading method...")
                 try:
                     # Alternative: load without specifying split first
@@ -230,15 +234,15 @@ class SimpleRAGBenchIngester:
                             }
                             records.append(record_dict)
                         all_records.extend(records)
-                        print(f"   ✅ Alternative method: Loaded {len(records)} records from {dataset_name}")
+                        print(f"   [OK] Alternative method: Loaded {len(records)} records from {dataset_name}")
                     else:
-                        print(f"   ❌ Split '{split}' not found in {dataset_name}")
+                        print(f"   [ERROR] Split '{split}' not found in {dataset_name}")
                 except Exception as e2:
-                    print(f"   ❌ Alternative method also failed: {e2}")
+                    print(f"   [ERROR] Alternative method also failed: {e2}")
         
         # Note: Sampling is now handled per-dataset during loading for better control
         
-        print(f"📊 Total records to process: {len(all_records)}")
+        print(f"[STATS] Total records to process: {len(all_records)}")
         return all_records
     
     def _get_domain(self, dataset_name: str) -> str:
@@ -256,7 +260,7 @@ class SimpleRAGBenchIngester:
             for qa_pair in self.evaluation_cache:
                 f.write(json.dumps(qa_pair, ensure_ascii=False) + '\n')
         
-        print(f"💾 Saved {len(self.evaluation_cache)} Q&A pairs to {output_path}")
+        print(f"[SAVE] Saved {len(self.evaluation_cache)} Q&A pairs to {output_path}")
         return output_path
     
     def close(self):
@@ -271,7 +275,7 @@ def main():
     
     try:
         result = ingester.run_preset("nano")
-        print(f"✅ Completed: {result}")
+        print(f"[OK] Completed: {result}")
     finally:
         ingester.close()
 

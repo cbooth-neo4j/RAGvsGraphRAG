@@ -234,19 +234,19 @@ Please identify duplicates, merge them, and provide the merged list.
         # Check cache first
         cached_labels = self._load_schema_cache(corpus_hash)
         if cached_labels:
-            print(f"📋 Using cached labels from previous run: {cached_labels}")
+            print(f"[CACHE] Using cached labels from previous run: {cached_labels}")
             return cached_labels
         
         # Sample corpus text
-        print("🔍 Sampling corpus text for entity discovery...")
+        print("[*] Sampling corpus text for entity discovery...")
         corpus_sample = self._sample_corpus_text(pdf_files)
         
         if not corpus_sample.strip():
-            print("⚠️ No text could be sampled from corpus")
+            print("[WARNING] No text could be sampled from corpus")
             return []
         
         # Discover labels
-        print("🧠 Analyzing corpus with LLM...")
+        print("[*] Analyzing corpus with LLM...")
         proposed_labels = self.discover_labels_for_text(corpus_sample)
         
         # CLI approval
@@ -301,29 +301,29 @@ Please identify duplicates, merge them, and provide the merged list.
     def _approve_labels_cli(self, proposed_labels: List[str]) -> List[str]:
         """CLI interface for user to approve/modify discovered labels."""
         if not proposed_labels:
-            print("⚠️ No labels were discovered")
+            print("[WARNING] No labels were discovered")
             return []
         
-        print(f"\n📋 Proposed entity types: {', '.join(proposed_labels)}")
+        print(f"\n[INFO] Proposed entity types: {', '.join(proposed_labels)}")
         
         while True:
-            choice = input("\n✅ Approve these entities? (y/n/edit): ").lower().strip()
+            choice = input("\n[?] Approve these entities? (y/n/edit): ").lower().strip()
             
             if choice in ['y', 'yes']:
                 return proposed_labels
             elif choice in ['n', 'no']:
-                print("❌ Labels rejected. Using fallback to CONSTRAINED mode.")
+                print("[INFO] Labels rejected. Using fallback to CONSTRAINED mode.")
                 return []
             elif choice in ['e', 'edit']:
-                print("📝 Enter your preferred entity types (comma-separated):")
+                print("[INPUT] Enter your preferred entity types (comma-separated):")
                 user_input = input("> ").strip()
                 if user_input:
                     user_labels = [label.strip().title() for label in user_input.split(',') if label.strip()]
                     if user_labels:
                         return user_labels
-                print("⚠️ No valid labels entered, trying again...")
+                print("[WARNING] No valid labels entered, trying again...")
             else:
-                print("⚠️ Please enter 'y', 'n', or 'edit'")
+                print("[WARNING] Please enter 'y', 'n', or 'edit'")
 
     def extract_entities_dynamic(self, text: str, allowed_labels: Optional[List[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
         """Extract entities dynamically using discovered or free labels."""
@@ -387,7 +387,7 @@ Please identify duplicates, merge them, and provide the merged list.
                     'end': len(entity.get('name', ''))
                 })
             
-            print(f"✅ Extracted {sum(len(v) for v in grouped.values())} dynamic entities")
+            print(f"[OK] Extracted {sum(len(v) for v in grouped.values())} dynamic entities")
             return grouped
             
         except json.JSONDecodeError as e:
@@ -544,11 +544,11 @@ Please identify duplicates, merge them, and provide the merged list.
                 try:
                     session.run(index)
                     index_name = index.split()[3]  # Extract index name for logging
-                    print(f"✅ Created/verified full-text index: {index_name}")
+                    print(f"[OK] Created/verified full-text index: {index_name}")
                 except Exception as e:
                     import traceback
                     logger.error(f"Unable to create full-text index: {traceback.print_exc()}. Exception: {e}")
-                    print(f"⚠️ Full-text index creation issue: {e}")
+                    print(f"[WARNING] Full-text index creation issue: {e}")
                     # Continue processing - index might already exist
 
             embed_dim = 768 if os.getenv('EMBEDDING_DIMENSION') is None else int(os.getenv('EMBEDDING_DIMENSION'))
@@ -576,7 +576,7 @@ Please identify duplicates, merge them, and provide the merged list.
         """Clear all data from the Neo4j database"""
         with self.driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
-            print("✅ Database cleared - all nodes and relationships deleted")
+            print("[OK] Database cleared - all nodes and relationships deleted")
     
     def process_document(self, pdf_path: str) -> Dict[str, Any]:
         """Process a single PDF document"""
@@ -601,10 +601,10 @@ Please identify duplicates, merge them, and provide the merged list.
         
         # Per-document discovery if needed (fallback if corpus-wide failed)
         if not self.discovered_labels:
-            print("\n🔎 Discovering entity labels from document text...")
+            print("\n[*] Discovering entity labels from document text...")
             proposed_labels = self.discover_labels_for_text(text)
             self.discovered_labels = self._approve_labels_cli(proposed_labels)
-            print(f"\n✅ Using labels: {self.discovered_labels}")
+            print(f"\n[OK] Using labels: {self.discovered_labels}")
         
         # Create document embedding
         doc_embedding = self.create_embedding(text) #text[:8000])  # Limit for embedding
@@ -738,12 +738,12 @@ Please identify duplicates, merge them, and provide the merged list.
         
         # Corpus-wide discovery (always enabled)
         if not self.discovered_labels:
-            print("\n🌐 Running corpus-wide entity discovery...")
+            print("\n[*] Running corpus-wide entity discovery...")
             self.discovered_labels = self.discover_corpus_labels(pdf_files)
             if self.discovered_labels:
-                print(f"✅ Corpus-wide labels approved: {self.discovered_labels}")
+                print(f"[OK] Corpus-wide labels approved: {self.discovered_labels}")
             else:
-                print("⚠️ No labels discovered, falling back to per-document discovery")
+                print("[WARNING] No labels discovered, falling back to per-document discovery")
         
         # Setup database schema first
         self.setup_database_schema()
@@ -753,18 +753,18 @@ Please identify duplicates, merge them, and provide the merged list.
             try:
                 result = self.process_document(str(pdf_path))
                 results[pdf_path.name] = result
-                print(f"✅ Successfully processed {pdf_path.name}")
+                print(f"[OK] Successfully processed {pdf_path.name}")
             except Exception as e:
-                print(f"❌ Error processing {pdf_path.name}: {e}")
+                print(f"[ERROR] Error processing {pdf_path.name}: {e}")
                 results[pdf_path.name] = {'status': 'error', 'error': str(e)}
         
         # Perform entity resolution if requested
         if perform_resolution:
             try:
                 self.perform_entity_resolution()
-                print("✅ Entity resolution completed")
+                print("[OK] Entity resolution completed")
             except Exception as e:
-                print(f"❌ Error during entity resolution: {e}")
+                print(f"[ERROR] Error during entity resolution: {e}")
         
         return results
     
@@ -1048,10 +1048,10 @@ def main():
             status = result.get('status', 'unknown')
             if status == 'success':
                 chunks = result.get('chunks_created', 0)
-                print(f"✅ {filename}: {chunks} chunks created")
+                print(f"[OK] {filename}: {chunks} chunks created")
             else:
                 error = result.get('error', 'Unknown error')
-                print(f"❌ {filename}: {error}")
+                print(f"[ERROR] {filename}: {error}")
         
         # Print database stats
         with processor.driver.session() as session:

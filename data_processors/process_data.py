@@ -29,7 +29,7 @@ def process_pdfs(pdf_dir: str = "PDFs",
         if not Path(pdf_dir).exists():
             raise FileNotFoundError(f"PDF directory '{pdf_dir}' not found!")
         
-        print(f"🚀 Processing PDFs from '{pdf_dir}' folder...")
+        print(f"[*] Processing PDFs from '{pdf_dir}' folder...")
         print(f"   Enhanced discovery: {enhanced_discovery}")
         print(f"   Entity resolution: {perform_resolution}")
         print("=" * 60)
@@ -59,9 +59,9 @@ def process_ragbench(preset: Optional[str] = None,
     processor_type = 'basic'  # Always use basic (now includes advanced features)
     
     if preset:
-        print(f"🧪 Processing RAGBench preset: '{preset}'")
+        print(f"[*] Processing RAGBench preset: '{preset}'")
     else:
-        print(f"🧪 Processing RAGBench custom datasets: {', '.join(datasets)}")
+        print(f"[*] Processing RAGBench custom datasets: {', '.join(datasets)}")
         print(f"   Records per dataset: {records or 50}")
     
     print(f"   Enhanced discovery: {enhanced_discovery}")
@@ -87,31 +87,31 @@ def process_ragbench(preset: Optional[str] = None,
 def print_results_summary(result: dict, source_type: str):
     """Print a formatted summary of processing results."""
     print("\n" + "=" * 60)
-    print(f"📊 **{source_type.upper()} PROCESSING COMPLETE**")
+    print(f"[STATS] **{source_type.upper()} PROCESSING COMPLETE**")
     print("=" * 60)
     
     if source_type == "pdf":
-        print(f"✅ Documents processed: {result['successful_documents']}/{result['total_documents']}")
-        print(f"📄 Total chunks created: {result['total_chunks_created']:,}")
-        print(f"🏷️  Total entities created: {result['total_entities_created']:,}")
-        print(f"🎯 Entity types discovered: {len(result['entity_types_discovered'])}")
+        print(f"[OK] Documents processed: {result['successful_documents']}/{result['total_documents']}")
+        print(f"[INFO] Total chunks created: {result['total_chunks_created']:,}")
+        print(f"[INFO] Total entities created: {result['total_entities_created']:,}")
+        print(f"[INFO] Entity types discovered: {len(result['entity_types_discovered'])}")
         print(f"   Types: {', '.join(result['entity_types_discovered'])}")
         
         if result['failed_documents'] > 0:
-            print(f"⚠️  Failed documents: {result['failed_documents']}")
+            print(f"[WARNING] Failed documents: {result['failed_documents']}")
     
     elif source_type == "ragbench":
         stats = result.get('stats', {})
-        print(f"✅ Records processed: {stats.get('records_loaded', 0)}")
-        print(f"📄 Documents processed: {stats.get('documents_processed', 0)}")
-        print(f"🧩 Total chunks created: {stats.get('total_chunks', 0):,}")
-        print(f"🏷️  Total entities created: {stats.get('total_entities', 0):,}")
+        print(f"[OK] Records processed: {stats.get('records_loaded', 0)}")
+        print(f"[INFO] Documents processed: {stats.get('documents_processed', 0)}")
+        print(f"[INFO] Total chunks created: {stats.get('total_chunks', 0):,}")
+        print(f"[INFO] Total entities created: {stats.get('total_entities', 0):,}")
         if 'evaluation_data_path' in stats:
-            print(f"📊 Evaluation data saved: {stats['evaluation_data_path']}")
-        print(f"🎯 Preset: {result.get('preset', 'unknown')}")
-        print(f"📋 Config: {result.get('config', {}).get('description', 'N/A')}")
+            print(f"[INFO] Evaluation data saved: {stats['evaluation_data_path']}")
+        print(f"[INFO] Preset: {result.get('preset', 'unknown')}")
+        print(f"[INFO] Config: {result.get('config', {}).get('description', 'N/A')}")
     
-    print(f"\n🎉 Knowledge graph ready! You can now:")
+    print(f"\n[OK] Knowledge graph ready! You can now:")
     print(f"   • Query the graph in Neo4j Browser: http://localhost:7474")
     print(f"   • Run retrievers for testing: python -m retrievers.chroma_retriever")
     print(f"   • Run benchmarks: python benchmark/ragas_benchmark.py --all")
@@ -215,11 +215,11 @@ Examples:
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from benchmark.ragbench.configs import INGESTION_PRESETS
         
-        print("📋 Available RAGBench Presets:")
+        print("[INFO] Available RAGBench Presets:")
         print("=" * 50)
         
         for preset_name, config in INGESTION_PRESETS.items():
-            print(f"\n🎯 {preset_name.upper()}")
+            print(f"\n[*] {preset_name.upper()}")
             print(f"   Description: {config['description']}")
             print(f"   Datasets: {', '.join(config['datasets'])}")
             print(f"   Records: {config.get('max_records', 'all')}")
@@ -227,7 +227,7 @@ Examples:
             print(f"   Estimated storage: {config['estimated_storage_gb']} GB")
             print(f"   Estimated cost: ${config['estimated_cost_usd']}")
         
-        print(f"\n💡 Usage: python process_data.py --ragbench --preset <preset_name>")
+        print(f"\n[HELP] Usage: python process_data.py --ragbench --preset <preset_name>")
         return
     
     # Validate arguments
@@ -239,7 +239,7 @@ Examples:
         
         # Validate preset if provided
         if args.preset and args.preset not in INGESTION_PRESETS:
-            print(f"❌ Unknown preset '{args.preset}'")
+            print(f"[ERROR] Unknown preset '{args.preset}'")
             print(f"   Available presets: {', '.join(INGESTION_PRESETS.keys())}")
             print(f"   Use --list-presets to see details")
             sys.exit(1)
@@ -248,13 +248,13 @@ Examples:
         if args.datasets:
             invalid_datasets = [d for d in args.datasets if d not in DATASET_SIZES]
             if invalid_datasets:
-                print(f"❌ Unknown datasets: {', '.join(invalid_datasets)}")
+                print(f"[ERROR] Unknown datasets: {', '.join(invalid_datasets)}")
                 print(f"   Available datasets: {', '.join(DATASET_SIZES.keys())}")
                 sys.exit(1)
         
         # Ensure either preset or datasets is provided
         if not args.preset and not args.datasets:
-            print("❌ Must specify either --preset or --datasets")
+            print("[ERROR] Must specify either --preset or --datasets")
             print("   Use --list-presets to see available presets")
             print("   Or use --datasets with specific dataset names")
             sys.exit(1)
@@ -281,10 +281,10 @@ Examples:
             print_results_summary(result, "ragbench")
     
     except KeyboardInterrupt:
-        print("\n\n⚠️  Processing interrupted by user")
+        print("\n\n[WARNING] Processing interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Error during processing: {e}")
+        print(f"\n[ERROR] Error during processing: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

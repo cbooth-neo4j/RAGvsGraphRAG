@@ -56,12 +56,12 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         # Set up database schema
         self.setup_database_schema()
         
-        print("🚀 Enhanced CustomGraphProcessor initialized")
+        print("[INIT] Enhanced CustomGraphProcessor initialized")
         logger.info("Enhanced CustomGraphProcessor initialized")
-        print("   ✅ Entity discovery with enhanced sampling")
-        print("   ✅ Text processing with PDF and table extraction")
-        print("   ✅ Graph operations with Neo4j")
-        print(f"   ✅ Relationship strategy: {relationship_strategy}")
+        print("   [OK] Entity discovery with enhanced sampling")
+        print("   [OK] Text processing with PDF and table extraction")
+        print("   [OK] Graph operations with Neo4j")
+        print(f"   [OK] Relationship strategy: {relationship_strategy}")
         logger.info(f"Relationship strategy: {relationship_strategy}")
 
     def process_document(self, pdf_path: str) -> Dict[str, Any]:
@@ -105,12 +105,12 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         
         # Per-document discovery if needed (fallback if corpus-wide failed)
         if not self.discovered_labels:
-            print("\n🔎 Discovering entity labels from document text...")
+            print("\n[DISCOVER] Discovering entity labels from document text...")
             logger.info("Discovering entity labels from document text...")
             proposed_labels = self.discover_labels_for_text(text)
             self.discovered_labels = self._approve_labels_cli(proposed_labels)
-            print(f"\n✅ Using labels: {self.discovered_labels}")
-            logger.info(f"\n✅ Using labels: {self.discovered_labels}")
+            print(f"\n[OK] Using labels: {self.discovered_labels}")
+            logger.info(f"\n[OK] Using labels: {self.discovered_labels}")
         
         # Create document embedding
         doc_embedding = self.create_embedding(text) #[:8000])  # Limit for embedding
@@ -169,13 +169,16 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             'processing_status': 'completed'
         }
     
-    def process_directory(self, pdf_dir: str, perform_resolution: bool = True) -> Dict[str, Any]:
+    def process_directory(self, pdf_dir: str, perform_resolution: bool = True, 
+                         prompt_for_advanced: bool = True, auto_advanced: bool = False) -> Dict[str, Any]:
         """
         Process all PDF files in a directory.
         
         Args:
             pdf_dir: Directory containing PDF files
             perform_resolution: Whether to perform entity resolution after processing
+            prompt_for_advanced: Show interactive prompt for advanced processing (default True for CLI)
+            auto_advanced: Auto-run advanced processing without prompt (backward compatibility)
             
         Returns:
             Overall processing statistics
@@ -197,7 +200,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         if not pdf_files:
             raise ValueError(f"No PDF files found in {pdf_dir}")
         
-        print(f"📁 Processing {len(pdf_files)} PDF files from {pdf_dir}")
+        print(f"[PROCESS] Processing {len(pdf_files)} PDF files from {pdf_dir}")
         logger.info(f"Processing {len(pdf_files)} PDF files from {pdf_dir}")
         
         # Discover labels corpus-wide first
@@ -205,7 +208,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             self.discovered_labels = self.discover_corpus_labels(pdf_files)
             logger.info(f"Labels discovered: {self.discovered_labels}")
             if not self.discovered_labels:
-                print("⚠️ No labels discovered, using default set")
+                print("[WARNING] No labels discovered, using default set")
                 logger.warning("No labels discovered, using default set")
                 self.discovered_labels = ["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT"]
         
@@ -221,9 +224,9 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                 results.append(result)
                 total_chunks += result['chunks_created']
                 total_entities += result['entities_created']
-                print(f"✅ Processed {pdf_path.name}")
+                print(f"[OK] Processed {pdf_path.name}")
             except Exception as e:
-                print(f"❌ Failed to process {pdf_path.name}: {e}")
+                print(f"[ERROR] Failed to process {pdf_path.name}: {e}")
                 results.append({
                     'document_id': f"failed_{pdf_path.stem}",
                     'error': str(e),
@@ -232,11 +235,11 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         
         # Perform entity resolution if requested
         if perform_resolution:
-            print("\n🔗 Creating chunk similarity relationships...")
+            print("\n[RELATE] Creating chunk similarity relationships...")
             logger.info("Creating chunk similarity relationships...")
             self.create_chunk_similarity_relationships()
             
-            print("\n🔍 Performing entity resolution...")
+            print("\n[RESOLVE] Performing entity resolution...")
             self.perform_entity_resolution()
         
         summary = {
@@ -249,7 +252,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             'results': results
         }
         
-        print(f"\n📊 Processing Summary:")
+        print(f"\n[SUMMARY] Processing Summary:")
         print(f"   Documents: {summary['successful_documents']}/{summary['total_documents']} successful")
         print(f"   Chunks: {summary['total_chunks_created']:,}")
         print(f"   Entities: {summary['total_entities_created']:,}")
@@ -260,14 +263,32 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         logger.info(f"   Chunks: {summary['total_chunks_created']:,}")
         logger.info(f"   Entities: {summary['total_entities_created']:,}")
         logger.info(f"   Entity types: {len(summary['entity_types_discovered'])}")
-        # Automatically perform advanced processing
-        print(f"\n🚀 Starting advanced processing (summarization + community detection)...")
-        logger.info(f"Starting advanced processing (summarization + community detection)...")
-        graph_stats = self.get_graph_statistics()
-        advanced_results = self.perform_advanced_processing(graph_stats)
         
-        # Add advanced results to summary
-        summary["advanced_processing"] = advanced_results
+        # Handle advanced processing based on parameters
+        graph_stats = self.get_graph_statistics()
+        
+        if auto_advanced:
+            # Backward compatibility: auto-run without prompt
+            print(f"\n[ADVANCED] Starting advanced processing (summarization + community detection)...")
+            logger.info(f"Starting advanced processing (summarization + community detection)...")
+            advanced_results = self.perform_advanced_processing(graph_stats)
+            summary["advanced_processing"] = advanced_results
+        elif prompt_for_advanced:
+            # Interactive prompt (default for CLI)
+            if self.prompt_for_advanced_processing(graph_stats):
+                print(f"\n[ADVANCED] Starting advanced processing...")
+                logger.info(f"Starting advanced processing (summarization + community detection)...")
+                advanced_results = self.perform_advanced_processing(graph_stats)
+                summary["advanced_processing"] = advanced_results
+            else:
+                print("\n[SKIP] Advanced processing skipped by user")
+                logger.info("Advanced processing skipped by user")
+                summary["advanced_processing"] = {"status": "skipped", "reason": "user_declined"}
+        else:
+            # Skip advanced processing entirely
+            print("\n[SKIP] Advanced processing disabled")
+            logger.info("Advanced processing disabled")
+            summary["advanced_processing"] = {"status": "skipped", "reason": "disabled"}
         
         return summary
     
@@ -275,7 +296,9 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                                  texts: List[str], 
                                  sources: List[str],
                                  use_enhanced_discovery: bool = True,
-                                 domain_hint: Optional[str] = None) -> Dict[str, Any]:
+                                 domain_hint: Optional[str] = None,
+                                 prompt_for_advanced: bool = True,
+                                 auto_advanced: bool = False) -> Dict[str, Any]:
         """
         Process RAGBench documents with enhanced entity discovery.
         
@@ -284,6 +307,8 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             sources: List of source identifiers
             use_enhanced_discovery: Whether to use enhanced sampling for entity discovery
             domain_hint: Optional domain hint (e.g., 'financial', 'medical')
+            prompt_for_advanced: Show interactive prompt for advanced processing (default True for CLI)
+            auto_advanced: Auto-run advanced processing without prompt (backward compatibility)
             
         Returns:
             Processing statistics
@@ -294,24 +319,24 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         if len(texts) != len(sources):
             raise ValueError("Number of texts must match number of sources")
         
-        print(f"📚 Processing {len(texts)} RAGBench documents...")
+        print(f"[PROCESS] Processing {len(texts)} RAGBench documents...")
         
         # Discover labels using enhanced method if requested
         if not self.discovered_labels:
             if use_enhanced_discovery:
-                print("🚀 Using enhanced entity discovery...")
+                print("[ENHANCED] Using enhanced entity discovery...")
                 documents = self.prepare_ragbench_documents_for_sampling(texts, sources)
                 self.discovered_labels = self.discover_labels_for_text_enhanced(
                     documents, domain_hint=domain_hint
                 )
             else:
-                print("🔍 Using standard entity discovery...")
+                print("[STANDARD] Using standard entity discovery...")
                 # Sample text for discovery (original method)
                 sample_text = "\n\n".join(text[:1000] for text in texts[:10])
                 self.discovered_labels = self.discover_labels_for_text(sample_text)
             
             if not self.discovered_labels:
-                print("⚠️ No labels discovered, using default set")
+                print("[WARNING] No labels discovered, using default set")
                 self.discovered_labels = ["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT"]
             
             # Get user approval
@@ -331,10 +356,10 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                 total_entities += result['entities_created']
                 
                 if (i + 1) % 10 == 0:
-                    print(f"✅ Processed {i + 1}/{len(texts)} documents")
+                    print(f"[OK] Processed {i + 1}/{len(texts)} documents")
                     
             except Exception as e:
-                print(f"❌ Failed to process document {i}: {e}")
+                print(f"[ERROR] Failed to process document {i}: {e}")
                 results.append({
                     'document_id': f"failed_ragbench_{i}",
                     'error': str(e),
@@ -353,22 +378,69 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             'results': results
         }
         
-        print(f"\n📊 RAGBench Processing Summary:")
+        print(f"\n[SUMMARY] RAGBench Processing Summary:")
         print(f"   Documents: {summary['successful_documents']}/{summary['total_documents']} successful")
         print(f"   Chunks: {summary['total_chunks_created']:,}")
         print(f"   Entities: {summary['total_entities_created']:,}")
         print(f"   Entity types: {len(summary['entity_types_discovered'])}")
         print(f"   Enhanced discovery: {use_enhanced_discovery}")
         
-        # Automatically perform advanced processing
-        print(f"\n🚀 Starting advanced processing (summarization + community detection)...")
+        # Handle advanced processing based on parameters
         graph_stats = self.get_graph_statistics()
-        advanced_results = self.perform_advanced_processing(graph_stats)
         
-        # Add advanced results to summary
-        summary["advanced_processing"] = advanced_results
+        if auto_advanced:
+            # Backward compatibility: auto-run without prompt
+            print(f"\n[ADVANCED] Starting advanced processing (summarization + community detection)...")
+            advanced_results = self.perform_advanced_processing(graph_stats)
+            summary["advanced_processing"] = advanced_results
+        elif prompt_for_advanced:
+            # Interactive prompt (default for CLI)
+            if self.prompt_for_advanced_processing(graph_stats):
+                print(f"\n[ADVANCED] Starting advanced processing...")
+                logger.info(f"Starting advanced processing (summarization + community detection)...")
+                advanced_results = self.perform_advanced_processing(graph_stats)
+                summary["advanced_processing"] = advanced_results
+            else:
+                print("\n[SKIP] Advanced processing skipped by user")
+                logger.info("Advanced processing skipped by user")
+                summary["advanced_processing"] = {"status": "skipped", "reason": "user_declined"}
+        else:
+            # Skip advanced processing entirely
+            print("\n[SKIP] Advanced processing disabled")
+            logger.info("Advanced processing disabled")
+            summary["advanced_processing"] = {"status": "skipped", "reason": "disabled"}
         
         return summary
+    
+    def prompt_for_advanced_processing(self, stats: Dict[str, int]) -> bool:
+        """
+        Prompt user to decide if they want advanced processing.
+        Returns True if user wants to proceed, False otherwise.
+        """
+        print("\n" + "="*63)
+        print("🎯 Basic graph construction complete!")
+        print("\n📊 Graph Statistics:")
+        print(f"   • Documents: {stats.get('document_count', 0):,}")
+        print(f"   • Chunks: {stats.get('chunk_count', 0):,}")
+        print(f"   • Entities: {stats.get('entity_count', 0):,}")
+        print(f"   • Relationships: {stats.get('relationship_count', 0):,}")
+        
+        print("\n" + "="*63)
+        print("⚡ ADVANCED GRAPHRAG PROCESSING AVAILABLE")
+        print("\nThis enables:")
+        print("  ✓ Community detection (hierarchical clustering)")
+        print("  ✓ Element summarization (AI-generated descriptions)")
+        print("  ✓ Advanced retrievers (advanced_graphrag, drift_graphrag)")
+        
+        print("\n⚠️  WARNING: This will take significant extra time and cost!")
+        print("   • Multiple LLM API calls for summarization")
+        print("   • Community detection algorithm processing")
+        print("   • May take 10-30+ minutes depending on graph size")
+        
+        print("\nℹ️  Current graph ready for basic retrievers (graph_rag, neo4j_vector, etc.)")
+        
+        response = input("\n❓ Run advanced processing? [y/N]: ").strip().lower()
+        return response in ['y', 'yes']
     
     # Backward compatibility method
     def create_entity_relationships(self, session, entity_ids: List[Tuple[str, str]]):

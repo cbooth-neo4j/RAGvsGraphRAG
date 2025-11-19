@@ -42,12 +42,12 @@ def run_full_pipeline(preset_name: str,
     
     config = INGESTION_PRESETS[preset_name]
     
-    print(f"🚀 RAGBench Complete Pipeline: {preset_name}")
+    print(f"[*] RAGBench Complete Pipeline: {preset_name}")
     print("=" * 60)
-    print(f"📋 {config['description']}")
-    print(f"💾 Estimated storage: {config['estimated_storage_gb']} GB")
-    print(f"🧠 Estimated RAM: {config['estimated_ram_gb']} GB")
-    print(f"💰 Estimated cost: ${config['estimated_cost_usd']}")
+    print(f"[DESCRIPTION] {config['description']}")
+    print(f"[STORAGE] Estimated storage: {config['estimated_storage_gb']} GB")
+    print(f"[RAM] Estimated RAM: {config['estimated_ram_gb']} GB")
+    print(f"[COST] Estimated cost: ${config['estimated_cost_usd']}")
     
     # Use processor type from config unless overridden
     final_processor_type = processor_type or config['processor_type']
@@ -63,14 +63,14 @@ def run_full_pipeline(preset_name: str,
         else:
             approaches = ["chroma", "graphrag", "advanced_graphrag", "drift_graphrag"]
     
-    print(f"🔧 Processor type: {final_processor_type}")
-    print(f"🎯 Testing approaches: {approaches}")
+    print(f"[CONFIG] Processor type: {final_processor_type}")
+    print(f"[TARGET] Testing approaches: {approaches}")
     
     # Confirm for expensive operations
     if config['estimated_cost_usd'] > 100:
-        confirm = input(f"\n⚠️  This operation may cost ~${config['estimated_cost_usd']}. Continue? [y/N]: ")
+        confirm = input(f"\n[WARNING] This operation may cost ~${config['estimated_cost_usd']}. Continue? [y/N]: ")
         if confirm.lower() not in ['y', 'yes']:
-            print("❌ Pipeline cancelled by user")
+            print("[X] Pipeline cancelled by user")
             return
     
     # Phase 1: Document Ingestion
@@ -85,14 +85,14 @@ def run_full_pipeline(preset_name: str,
             ingestion_result = ingester.run_preset(preset_name)
             
             if ingestion_result["status"] != "completed":
-                print(f"❌ Ingestion failed: {ingestion_result}")
+                print(f"[X] Ingestion failed: {ingestion_result}")
                 return
             
-            print(f"✅ Ingestion completed successfully!")
+            print(f"[OK] Ingestion completed successfully!")
             
             # Show ingestion statistics
             stats = ingestion_result["stats"]
-            print(f"\n📊 Ingestion Statistics:")
+            print(f"\n[STATS] Ingestion Statistics:")
             print(f"   Records processed: {stats['records_loaded']}")
             print(f"   Documents processed: {stats['documents_processed']}")
             print(f"   Chunks created: {stats['chunks_created']}")
@@ -103,11 +103,11 @@ def run_full_pipeline(preset_name: str,
         finally:
             ingester.close()
     else:
-        print(f"\n⏭️  Skipping ingestion (using existing graph)")
+        print(f"\n[SKIP] Skipping ingestion (using existing graph)")
         eval_data_path = f"benchmark/ragbench/data/{preset_name}_eval.jsonl"
         
         if not Path(eval_data_path).exists():
-            print(f"❌ Evaluation data not found: {eval_data_path}")
+            print(f"[X] Evaluation data not found: {eval_data_path}")
             print("   Cannot skip ingestion without existing evaluation data")
             return
     
@@ -140,15 +140,15 @@ def run_full_pipeline(preset_name: str,
     
     # Phase 4: Final Summary
     print(f"\n" + "="*60)
-    print("PIPELINE COMPLETE! 🎉")
+    print("PIPELINE COMPLETE!")
     print("="*60)
     
-    print(f"📁 All outputs saved to: benchmark_outputs/{preset_name}/")
-    print(f"🌐 Open detailed_results.html in your browser for human review")
-    print(f"📊 Check summary_report.json for aggregated statistics")
+    print(f"[OUTPUT] All outputs saved to: benchmark_outputs/{preset_name}/")
+    print(f"[HTML] Open detailed_results.html in your browser for human review")
+    print(f"[JSON] Check summary_report.json for aggregated statistics")
     
     if benchmark_results and 'comparison_table' in benchmark_results:
-        print(f"\n🏆 Quick Results Summary:")
+        print(f"\n[RESULTS] Quick Results Summary:")
         comparison_table = benchmark_results['comparison_table']
         
         # Show top performer for each metric
@@ -219,9 +219,9 @@ Examples:
             skip_ingestion=args.skip_ingestion
         )
     except KeyboardInterrupt:
-        print(f"\n⏹️  Pipeline interrupted by user")
+        print(f"\n[STOP] Pipeline interrupted by user")
     except Exception as e:
-        print(f"\n❌ Pipeline failed: {e}")
+        print(f"\n[ERROR] Pipeline failed: {e}")
         import traceback
         traceback.print_exc()
 

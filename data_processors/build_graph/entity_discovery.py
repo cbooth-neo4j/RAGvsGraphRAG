@@ -141,7 +141,7 @@ class EntityDiscoveryMixin:
         if not documents:
             return {'sample_text': '', 'sampling_stats': {}, 'document_coverage': [], 'diversity_score': 0.0}
         
-        print(f"🔬 Enhanced corpus sampling from {len(documents)} documents...")
+        print(f"[*] Enhanced corpus sampling from {len(documents)} documents...")
         
         # Step 1: Document characterization
         doc_features = self._characterize_documents(documents)
@@ -236,7 +236,7 @@ class EntityDiscoveryMixin:
             stratum_docs.sort(key=lambda x: x[2]['complexity_score'], reverse=True)
             selected_docs.extend([doc for _, doc, _ in stratum_docs[:n_from_stratum]])
         
-        print(f"📊 Selected {len(selected_docs)} documents from {len(strata)} strata")
+        print(f"[INFO] Selected {len(selected_docs)} documents from {len(strata)} strata")
         return selected_docs[:n_docs]
     
     def _multi_strategy_sampling(self, documents: List[Dict[str, Any]]) -> Dict[str, List[str]]:
@@ -338,9 +338,9 @@ class EntityDiscoveryMixin:
                     return selected_segments
                 
             except Exception as e:
-                print(f"⚠️  TF-IDF clustering failed: {e}, falling back to random sampling")
+                print(f"[WARNING] TF-IDF clustering failed: {e}, falling back to random sampling")
         else:
-            print("⚠️  sklearn not available, using random sampling for diversity")
+            print("[WARNING] sklearn not available, using random sampling for diversity")
         
         # Fallback: random sampling
         selected = random.sample(segments, min(5, len(segments)))
@@ -520,21 +520,21 @@ class EntityDiscoveryMixin:
         # Check cache first
         cached_labels = self._load_schema_cache(corpus_hash)
         if cached_labels:
-            print(f"📋 Using cached labels from previous run: {cached_labels}")
+            print(f"[CACHE] Using cached labels from previous run: {cached_labels}")
             return cached_labels
         
         # Sample corpus text
-        print("🔍 Sampling corpus text for entity discovery...")
-        logger.debug("🔍 Sampling corpus text for entity discovery...")
+        print("[*] Sampling corpus text for entity discovery...")
+        logger.debug("[*] Sampling corpus text for entity discovery...")
         corpus_sample = self._sample_corpus_text(pdf_files)
         logger.debug(f"Corpus Sample length: {len(corpus_sample)}")
 
         if not corpus_sample.strip():
-            print("⚠️ No text could be sampled from corpus")
+            print("[WARNING] No text could be sampled from corpus")
             return []
         
         # Discover labels
-        print("🧠 Analyzing corpus with LLM...")
+        print("[*] Analyzing corpus with LLM...")
         proposed_labels = self.discover_labels_for_text(corpus_sample, 30) ##added 30
         
         # CLI approval
@@ -624,7 +624,7 @@ class EntityDiscoveryMixin:
         if not proposed_labels:
             return []
         
-        print(f"\n🎯 Discovered Entity Labels ({len(proposed_labels)} proposed):")
+        print(f"\n[DISCOVERY] Discovered Entity Labels ({len(proposed_labels)} proposed):")
         for i, label in enumerate(proposed_labels, 1):
             print(f"  {i:2d}. {label}")
         
@@ -637,25 +637,25 @@ class EntityDiscoveryMixin:
             choice = 'a' # input("Your choice: ").strip().lower()
             
             if choice == 'a':
-                print(f"✅ Approved all {len(proposed_labels)} labels")
+                print(f"[OK] Approved all {len(proposed_labels)} labels")
                 return proposed_labels
             elif choice == 'n':
                 basic_labels = ["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT"]
-                print(f"✅ Using basic labels: {basic_labels}")
+                print(f"[OK] Using basic labels: {basic_labels}")
                 return basic_labels
             elif ',' in choice:
                 try:
                     indices = [int(x.strip()) - 1 for x in choice.split(',')]
                     selected = [proposed_labels[i] for i in indices if 0 <= i < len(proposed_labels)]
                     if selected:
-                        print(f"✅ Approved {len(selected)} labels: {selected}")
+                        print(f"[OK] Approved {len(selected)} labels: {selected}")
                         return selected
                     else:
-                        print("❌ Invalid selection")
+                        print("[ERROR] Invalid selection")
                 except (ValueError, IndexError):
-                    print("❌ Invalid format. Use comma-separated numbers (e.g., 1,3,5)")
+                    print("[ERROR] Invalid format. Use comma-separated numbers (e.g., 1,3,5)")
             else:
-                print("❌ Invalid choice. Use 'a', 'n', or comma-separated numbers")
+                print("[ERROR] Invalid choice. Use 'a', 'n', or comma-separated numbers")
     
     def extract_entities_dynamic(self, text: str, allowed_labels: Optional[List[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
         """Extract entities using dynamically discovered labels."""
@@ -776,7 +776,7 @@ class EntityDiscoveryMixin:
         Returns:
             List of discovered entity type names
         """
-        print("🚀 Starting enhanced entity discovery...")
+        print("[*] Starting enhanced entity discovery...")
         logger.debug(f"discover_labels_for_text_enhanced: Starting enhanced entity discovery")
         
         # Enhanced sampling
@@ -784,10 +784,10 @@ class EntityDiscoveryMixin:
         sample_text = sample_result['sample_text']
         
         if not sample_text.strip():
-            print("⚠️ No text could be sampled from corpus")
+            print("[WARNING] No text could be sampled from corpus")
             return []
         
-        print(f"📊 Sampling metrics:")
+        print(f"[STATS] Sampling metrics:")
         stats = sample_result['sampling_stats']
         print(f"   Documents: {stats.get('selected_documents', 0)}/{stats.get('total_documents', 0)}")
         print(f"   Sample size: {stats.get('final_sample_chars', 0):,} chars")
@@ -851,7 +851,7 @@ class EntityDiscoveryMixin:
                     cleaned_labels.append(label)
             
             discovered_labels = cleaned_labels[:max_labels]
-            print(f"🎯 Discovered {len(discovered_labels)} entity types: {', '.join(discovered_labels)}")
+            print(f"[DISCOVERY] Discovered {len(discovered_labels)} entity types: {', '.join(discovered_labels)}")
             
             return discovered_labels
             

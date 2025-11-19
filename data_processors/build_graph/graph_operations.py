@@ -50,7 +50,7 @@ class GraphOperationsMixin:
         neo4j_uri = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
         neo4j_user = os.environ.get('NEO4J_USERNAME', 'neo4j')
         neo4j_password = os.environ.get('NEO4J_PASSWORD', 'password')
-        neo4j_db = os.environ.get('CLIENT_NEO4J_DATABASE', 'neo4j_db')
+        neo4j_db = os.environ.get('CLIENT_NEO4J_DATABASE', 'neo4j')  # Changed default from neo4j_db to neo4j
         self.neo4j_db = neo4j_db
 
         logger.info(f'GraphDatabase driver setup. Database is: {neo4j_db}')
@@ -69,7 +69,7 @@ class GraphOperationsMixin:
             drop_schema (bool): If True, also drop all indexes, constraints, and vector indexes
         """
         with self.driver.session(database=self.neo4j_db) as session:
-            print("🗑️  Clearing Neo4j database...")
+            print("[CLEANUP] Clearing Neo4j database...")
             
             # 1. Delete all nodes and relationships
             print("  - Deleting all nodes and relationships...")
@@ -133,15 +133,15 @@ class GraphOperationsMixin:
                 except Exception as e:
                     print(f"    - GDS cleanup: {e}")
             
-            print("✅ Comprehensive database cleanup complete")
+            print("[OK] Comprehensive database cleanup complete")
             
             # 7. Verify cleanup
             result = session.run("MATCH (n) RETURN count(n) as node_count").single()
             node_count = result['node_count']
             if node_count == 0:
-                print("✅ Verification: Database is completely empty")
+                print("[OK] Verification: Database is completely empty")
             else:
-                print(f"⚠️  Warning: {node_count} nodes still remain")
+                print(f"[WARNING] {node_count} nodes still remain")
     
     def setup_database_schema(self):
         """Set up Neo4j database schema with constraints and indexes."""
@@ -169,13 +169,13 @@ class GraphOperationsMixin:
             try:
                 test_embedding = embeddings_model.embed_query("test")
                 vector_dimensions = len(test_embedding)
-                print(f"🔍 Detected embedding dimensions: {vector_dimensions}")
+                print(f"[DETECT] Detected embedding dimensions: {vector_dimensions}")
             except Exception as e:
-                print(f"⚠️  Could not detect embedding dimensions, defaulting to 768: {e}")
+                print(f"[WARNING] Could not detect embedding dimensions, defaulting to 768: {e}")
                 logger.warning(f"Could not detect embedding dimensions, defaulting to 768: {e}")
                 vector_dimensions = 768
         
-        print(f"📐 Setting up vector indexes with {vector_dimensions} dimensions")
+        print(f"[SCHEMA] Setting up vector indexes with {vector_dimensions} dimensions")
         
         with self.driver.session(database=self.neo4j_db) as session:
             # Create constraints for unique IDs
@@ -257,7 +257,7 @@ class GraphOperationsMixin:
                     logger.warning(f"Vector index may already exist: {e}")
                     print(f"Vector index may already exist: {e}/Traceback: {traceback.print_exc()}")
         
-        print("✅ Database schema setup complete")
+        print("[OK] Database schema setup complete")
         logger.info("Database schema setup complete")
     
 
@@ -536,7 +536,7 @@ class GraphOperationsMixin:
             
             # Ensure relationships is a list
             if not isinstance(relationships, list):
-                print(f"   ⚠️ Expected list of relationships, got {type(relationships)}")
+                print(f"   [WARNING] Expected list of relationships, got {type(relationships)}")
                 return []
             
             # Validate and convert to internal format
@@ -544,7 +544,7 @@ class GraphOperationsMixin:
             for rel in relationships:
                 # Skip if rel is not a dictionary
                 if not isinstance(rel, dict):
-                    print(f"   ⚠️ Expected relationship dict, got {type(rel)}: {rel}")
+                    print(f"   [WARNING] Expected relationship dict, got {type(rel)}: {rel}")
                     continue
                     
                 if (rel.get('source') and rel.get('target') and 
@@ -567,7 +567,7 @@ class GraphOperationsMixin:
             return validated_relationships
             
         except (json.JSONDecodeError, Exception) as e:
-            print(f"   ⚠️ LLM relationship extraction failed: {e}")
+            print(f"   [WARNING] LLM relationship extraction failed: {e}")
             return []
     
     def _find_entity_id(self, entity_name: str, entity_ids: List[Tuple[str, str]]) -> str:
@@ -706,7 +706,7 @@ class GraphOperationsMixin:
     
     def create_chunk_similarity_relationships(self, similarity_threshold: float = 0.95):
         """Create SIMILAR relationships between semantically similar chunks."""
-        print(f"🔗 Creating chunk similarity relationships (threshold: {similarity_threshold})...")
+        print(f"[*] Creating chunk similarity relationships (threshold: {similarity_threshold})...")
         
         with self.driver.session() as session:
             # Get all chunk embeddings
@@ -741,7 +741,7 @@ class GraphOperationsMixin:
                         
                         relationships_created += 1
             
-            print(f"✅ Created {relationships_created} similarity relationships")
+            print(f"[OK] Created {relationships_created} similarity relationships")
     
     # ==================== NEW RELATIONSHIP DISCOVERY METHODS ====================
     
@@ -1000,7 +1000,7 @@ class GraphOperationsMixin:
     def perform_entity_resolution(self, similarity_threshold: float = 0.95, 
                                 word_edit_distance: int = 3, max_workers: int = 4):
         """Perform comprehensive entity resolution across the graph."""
-        print("🔍 Starting entity resolution...")
+        print("[RESOLVE] Starting entity resolution...")
         logger.info(f"Starting entity resolution....")
         
         with self.driver.session() as session:
@@ -1027,7 +1027,7 @@ class GraphOperationsMixin:
                 if len(entities) < 2:
                     continue
                 
-                print(f"🔍 Resolving {entity_type} entities ({len(entities)} entities)...")
+                print(f"[RESOLVE] Resolving {entity_type} entities ({len(entities)} entities)...")
                 logger.info(f"Resolving {entity_type} entities ({len(entities)} entities)...")
                 
                 # Use LLM for duplicate detection
