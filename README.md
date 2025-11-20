@@ -325,5 +325,5 @@ python tests/test_ragas_setup.py    # All approaches validation
 python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --neo4j-vector --graphrag --advanced-graphrag  --limit 1 --jsonl benchmark/ragbench__nano_benchmark.jsonl
 ```
 ```
-python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --neo4j-vector --graphrag --advanced-graphrag  --limit 1
+python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --neo4j-vector --graphrag --advanced-graphrag --text2cypher --limit 1
 ```
