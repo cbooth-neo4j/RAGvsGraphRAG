@@ -106,6 +106,19 @@ Recommended upgrade:
 
 This should reduce DB time and improve relevance at the same time.
 
+## Related changes merged (graph creation performance)
+
+While the focus of this report is **global retrieval**, we also merged an upstream PR that materially improves **graph construction time** (community/entity summarization) via async processing:
+
+- **PR #3**: *Optimize graph creation with async processing and update dependencies* (merged into `main`)
+  - `6e80caf`: **Asynchronous community summarization processing**
+  - `e5a6686`: **Async entity summarization + configurable concurrency**
+  - `8e0bc24`: Import path refactor for `RecursiveCharacterTextSplitter`
+  - `09ea3bc`: PDF processing import/error-message fix
+  - `f97f8ef`: Requirements updates for structured outputs / LangGraph components
+
+These changes primarily reduce **community creation** runtime during ingestion/build steps and are complementary to the global retriever optimizations above.
+
 ### 2) Add full timing breakdown to map/reduce (optional)
 
 If the client still wants map/reduce fallback, add:
