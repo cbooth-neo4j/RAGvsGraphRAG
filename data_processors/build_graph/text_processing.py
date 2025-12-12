@@ -26,7 +26,7 @@ from config import get_embeddings
 
 # Optional PDF processing dependency
 try:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
     _HAS_PDF = True
 except ImportError:
     _HAS_PDF = False
@@ -68,7 +68,7 @@ class TextProcessingMixin:
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         """Extract text content from PDF file."""
         if not _HAS_PDF:
-            raise ImportError("PyPDF2 is required for PDF processing. Install with: pip install PyPDF2")
+            raise ImportError("pypdf is required for PDF processing. Install with: pip install pypdf")
         
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
