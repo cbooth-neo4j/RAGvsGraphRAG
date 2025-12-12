@@ -39,12 +39,18 @@ from utils.graph_rag_logger import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
 
-# os.environ['SSL_CERT_FILE'] = 'C:\\llm-graph-builder-main-v1\\backend\\src\\CitiInternalCAChain_PROD.pem'
-# tiktoken_cache_dir = "C:\\llm-graph-builder-main-v1\\backend\\src\\tiktoken_cache"  # note the paths here...\\
+# Optional SSL and tiktoken cache configuration.
+# NOTE: Do not hardcode environment-specific Linux paths here, as they can break
+# OpenAI/httpx SSL verification when the referenced cert file doesn't exist.
 
-os.environ['SSL_CERT_FILE'] = '/var/app/anaconda/projects/sd43372/RAGvsGraphRAG-main-V2/CitiInternalCAChain_PROD.pem'
-tiktoken_cache_dir = '/var/app/anaconda/projects/sd43372/RAGvsGraphRAG-main-V2/tiktoken_cache/'
-os.environ["TIKTOKEN_CACHE_DIR"] = tiktoken_cache_dir
+_ssl_cert_file = os.environ.get("SSL_CERT_FILE")
+if _ssl_cert_file and not os.path.exists(_ssl_cert_file):
+    # If a user/system sets SSL_CERT_FILE to an invalid path, unset it to avoid httpx failures.
+    os.environ.pop("SSL_CERT_FILE", None)
+
+_tiktoken_cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR")
+if _tiktoken_cache_dir and not os.path.exists(_tiktoken_cache_dir):
+    os.environ.pop("TIKTOKEN_CACHE_DIR", None)
 
 
 # Advanced Data Models

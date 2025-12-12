@@ -21,31 +21,53 @@ async def _run_query_once(
     cold_start: bool,
     top_k_communities: int,
     strategy: str,
+    impl: str,
     shared_retriever: Any = None,
     extra_kwargs: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    from retrievers.advanced_graphrag_retriever import LightweightAdvancedGlobalOnlyRetriever
-
     extra_kwargs = extra_kwargs or {}
     init_ms = 0.0
 
-    if cold_start:
-        t_init0 = time.time()
-        retriever = LightweightAdvancedGlobalOnlyRetriever()
-        t_init1 = time.time()
-        init_ms = (t_init1 - t_init0) * 1000.0
+    if impl == "optimized":
+        from retrievers.advanced_graphrag_retriever import LightweightAdvancedGlobalOnlyRetriever
+
+        if cold_start:
+            t_init0 = time.time()
+            retriever = LightweightAdvancedGlobalOnlyRetriever()
+            t_init1 = time.time()
+            init_ms = (t_init1 - t_init0) * 1000.0
+        else:
+            retriever = shared_retriever
+            if retriever is None:
+                raise ValueError("shared_retriever is required when cold_start=false")
+    elif impl == "baseline":
+        from retrievers.advanced_graphrag_retriever import LightweightAdvancedGraphRAGRetriever
+
+        if cold_start:
+            t_init0 = time.time()
+            retriever = LightweightAdvancedGraphRAGRetriever()
+            t_init1 = time.time()
+            init_ms = (t_init1 - t_init0) * 1000.0
+        else:
+            retriever = shared_retriever
+            if retriever is None:
+                raise ValueError("shared_retriever is required when cold_start=false")
     else:
-        retriever = shared_retriever
-        if retriever is None:
-            raise ValueError("shared_retriever is required when cold_start=false")
+        raise ValueError(f"Unknown impl: {impl}")
 
     t_q0 = time.time()
-    result = await retriever.global_search_query(
-        query,
-        top_k_communities=top_k_communities,
-        strategy=strategy,
-        **extra_kwargs,
-    )
+    if impl == "optimized":
+        result = await retriever.global_search_query(
+            query,
+            top_k_communities=top_k_communities,
+            strategy=strategy,
+            **extra_kwargs,
+        )
+    else:
+        # Baseline path uses the older global search (map-reduce over all reports).
+        # `top_k_communities` and `strategy` are not supported the same way; we record them
+        # for comparison but do not force them.
+        result = await retriever.global_search_query(query, **extra_kwargs)
     t_q1 = time.time()
 
     if cold_start:
@@ -57,6 +79,7 @@ async def _run_query_once(
 
     return {
         "query": query,
+        "impl": impl,
         "strategy": strategy,
         "cold_start": cold_start,
         "top_k_communities": top_k_communities,
@@ -85,15 +108,23 @@ async def main_async(args: argparse.Namespace) -> int:
 
     shared_retriever = None
     if not args.cold_start:
-        from retrievers.advanced_graphrag_retriever import LightweightAdvancedGlobalOnlyRetriever
+        if args.impl == "optimized":
+            from retrievers.advanced_graphrag_retriever import LightweightAdvancedGlobalOnlyRetriever
 
-        t_init0 = time.time()
-        shared_retriever = LightweightAdvancedGlobalOnlyRetriever()
-        t_init1 = time.time()
+            t_init0 = time.time()
+            shared_retriever = LightweightAdvancedGlobalOnlyRetriever()
+            t_init1 = time.time()
+        else:
+            from retrievers.advanced_graphrag_retriever import LightweightAdvancedGraphRAGRetriever
+
+            t_init0 = time.time()
+            shared_retriever = LightweightAdvancedGraphRAGRetriever()
+            t_init1 = time.time()
         rows.append(
             {
                 "event": "warm_retriever_init",
                 "init_ms": (t_init1 - t_init0) * 1000.0,
+                "impl": args.impl,
             }
         )
 
@@ -105,6 +136,7 @@ async def main_async(args: argparse.Namespace) -> int:
                     cold_start=args.cold_start,
                     top_k_communities=args.top_k_communities,
                     strategy=args.strategy,
+                    impl=args.impl,
                     shared_retriever=shared_retriever,
                 )
                 row["run_idx"] = run_idx
@@ -128,6 +160,12 @@ def main() -> int:
     p.add_argument("--queries", default="benchmark/queries/global.json", help="Path to JSON list of queries.")
     p.add_argument("--runs", type=int, default=1, help="Number of repeats.")
     p.add_argument("--limit", type=int, default=0, help="Optional limit on number of queries.")
+    p.add_argument(
+        "--impl",
+        default="optimized",
+        choices=["optimized", "baseline"],
+        help="Which implementation to benchmark: optimized (global-only, single-pass) or baseline (full-graph, map-reduce).",
+    )
     p.add_argument(
         "--cold-start",
         action="store_true",
