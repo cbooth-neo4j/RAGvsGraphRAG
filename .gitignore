@@ -42,6 +42,11 @@ chroma_db/
 
 # Logs
 *.log
+*.log.*
+logs/
+
+# Benchmark outputs
+benchmark/results/
 
 # OS specific
 .DS_Store

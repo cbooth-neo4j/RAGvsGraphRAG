@@ -130,6 +130,7 @@ class SearchResult:
     llm_calls_categories: Optional[Dict[str, int]] = field(default_factory=dict)
     prompt_tokens_categories: Optional[Dict[str, int]] = field(default_factory=dict)
     output_tokens_categories: Optional[Dict[str, int]] = field(default_factory=dict)
+    timings: Dict[str, float] = field(default_factory=dict)
 
 @dataclass
 class GlobalSearchResult(SearchResult):
@@ -146,6 +147,7 @@ class ContextBuilderResult:
     llm_calls: int = 0
     prompt_tokens: int = 0
     output_tokens: int = 0
+    timings: Dict[str, float] = field(default_factory=dict)
 
 
 # Vector Store Abstraction for Neo4j
@@ -314,6 +316,20 @@ def num_tokens(text: str, token_encoder: tiktoken.Encoding) -> int:
     if not text:
         return 0
     return len(token_encoder.encode(text))
+
+
+async def _ainvoke_compatible(model, messages, **kwargs):
+    """
+    Provider-agnostic async invoke helper.
+    - Uses `ainvoke` when available (OpenAI/VertexAI LangChain chat models).
+    - Falls back to running sync `invoke` in a worker thread (e.g., some Ollama wrappers).
+    """
+    if hasattr(model, "ainvoke"):
+        try:
+            return await model.ainvoke(messages, **kwargs)
+        except Exception:
+            logger.debug("ainvoke failed; falling back to invoke() in thread", exc_info=True)
+    return await asyncio.to_thread(model.invoke, messages, **kwargs)
 
 def map_query_to_entities(
         query: str, 
@@ -623,6 +639,104 @@ class Neo4jDataLoader:
                 )
                 reports.append(report)
         logger.info(f'Loaded {len(reports)} community reports.')
+        return reports
+
+    def load_top_community_reports(
+        self,
+        k: int = 8,
+        min_rank: int = 0,
+        query: Optional[str] = None,
+    ) -> List[CommunityReport]:
+        """
+        Load top-K community reports from Neo4j.
+
+        Note: This is a fast, cold-start-friendly fallback when we don't have
+        query-conditioned community embeddings indexed yet.
+        - If `query` is provided, we try a lightweight keyword-based match first.
+        - Otherwise (or if no keyword matches), we fall back to top-K by rank.
+        """
+        k = max(int(k), 0)
+        if k == 0:
+            return []
+
+        reports: List[CommunityReport] = []
+        with self.driver.session() as session:
+            result = []
+
+            # 1) Lightweight keyword match (query-conditioned) if query provided
+            terms: List[str] = []
+            if query:
+                import re
+
+                terms = re.findall(r"[a-zA-Z0-9]{4,}", query.lower())
+                # de-dup and cap to keep Cypher params small
+                seen = set()
+                deduped = []
+                for t in terms:
+                    if t not in seen:
+                        seen.add(t)
+                        deduped.append(t)
+                terms = deduped[:12]
+
+            if terms:
+                result = session.run(
+                    """
+                    MATCH (c:__Community__)
+                    WHERE c.summary IS NOT NULL
+                      AND coalesce(c.community_rank, 0) >= $min_rank
+                      AND any(term IN $terms WHERE
+                        toLower(c.summary) CONTAINS term OR
+                        toLower(coalesce(c.title, '')) CONTAINS term
+                      )
+                    RETURN c.id as community_id,
+                           c.summary as full_content,
+                           c.level as level,
+                           c.community_rank as rank,
+                           coalesce(c.title, c.id) as title,
+                           c.rating_explanation as rating_explanation,
+                           c.summary as summary
+                    ORDER BY c.level, c.community_rank DESC
+                    LIMIT $k
+                    """,
+                    k=k,
+                    min_rank=min_rank,
+                    terms=terms,
+                ).data()
+
+            # 2) Fallback: top-K by rank
+            if not result:
+                result = session.run(
+                    """
+                    MATCH (c:__Community__)
+                    WHERE c.summary IS NOT NULL
+                      AND coalesce(c.community_rank, 0) >= $min_rank
+                    RETURN c.id as community_id,
+                           c.summary as full_content,
+                           c.level as level,
+                           c.community_rank as rank,
+                           coalesce(c.title, c.id) as title,
+                           c.rating_explanation as rating_explanation,
+                           c.summary as summary
+                    ORDER BY c.level, c.community_rank DESC
+                    LIMIT $k
+                    """,
+                    k=k,
+                    min_rank=min_rank,
+                ).data()
+
+            for record in result:
+                reports.append(
+                    CommunityReport(
+                        community_id=record["community_id"],
+                        full_content=record["full_content"],
+                        level=record["level"] or 0,
+                        rank=record["rank"],
+                        title=record["title"],
+                        rating_explanation=record["rating_explanation"],
+                        summary=record["summary"],
+                    )
+                )
+        logger.info(f"Loaded {len(reports)} top community reports (k={k}).")
         return reports
 
 
@@ -1232,6 +1346,69 @@ class GlobalCommunityContext(GlobalContextBuilder):
         )
 
 
+class Neo4jGlobalCommunityContext(GlobalContextBuilder):
+    """
+    Global context builder that fetches community reports from Neo4j on-demand.
+
+    This is designed for serverless/cold-start environments where loading the full graph
+    (entities/relationships/text units) is prohibitively expensive.
+    """
+
+    def __init__(
+        self,
+        data_loader: Neo4jDataLoader,
+        token_encoder: Optional[tiktoken.Encoding] = None,
+    ):
+        self.data_loader = data_loader
+        self.token_encoder = token_encoder or tiktoken.get_encoding("cl100k_base")
+
+    async def build_context(
+        self,
+        query: str,
+        top_k_communities: int = 8,
+        use_community_summary: bool = True,
+        column_delimiter: str = "|",
+        shuffle_data: bool = False,
+        include_community_rank: bool = False,
+        min_community_rank: int = 0,
+        max_context_tokens: int = 8000,
+        context_name: str = "Reports",
+        single_batch: bool = True,
+        **kwargs: Any,
+    ) -> ContextBuilderResult:
+        t0 = time.time()
+        community_reports = self.data_loader.load_top_community_reports(
+            k=top_k_communities,
+            min_rank=min_community_rank,
+            query=query,
+        )
+        t1 = time.time()
+
+        community_context, community_context_data = build_community_context(
+            community_reports=community_reports,
+            token_encoder=self.token_encoder,
+            use_community_summary=use_community_summary,
+            column_delimiter=column_delimiter,
+            shuffle_data=shuffle_data,
+            include_community_rank=include_community_rank,
+            min_community_rank=min_community_rank,
+            max_context_tokens=max_context_tokens,
+            single_batch=single_batch,
+            context_name=context_name,
+        )
+        t2 = time.time()
+
+        return ContextBuilderResult(
+            context_chunks=community_context,
+            context_records=community_context_data,
+            timings={
+                "neo4j_ms": (t1 - t0) * 1000.0,
+                "context_ms": (t2 - t1) * 1000.0,
+                "communities_used": float(len(community_reports)),
+            },
+        )
+
+
 # Advanced Search Classes
 class LocalSearch:
     """Local search implementation with comprehensive context building."""
@@ -1296,10 +1473,7 @@ class LocalSearch:
             #     **self.model_params,
             # )
 
-            response =  self.model.invoke(
-                messages,
-                **self.model_params,
-            )
+            response = await _ainvoke_compatible(self.model, messages, **self.model_params)
             
             full_response = response.content
             
@@ -1405,6 +1579,119 @@ Analyst Responses:
 """
 
 
+GLOBAL_SINGLE_SYSTEM_PROMPT = """
+You are a helpful assistant answering questions based on the provided community report context.
+
+Use the context data below to answer the user's question. If the context doesn't contain sufficient information,
+state this clearly.
+
+Guidelines:
+1. Answer based on the provided context
+2. Be specific and cite relevant community titles where helpful
+3. Be comprehensive but concise
+4. Use a {response_type} format for your response
+
+Context Data:
+{context_data}
+"""
+
+
+class GlobalSearchSinglePass:
+    """Global search implementation that answers in a single LLM call (no map-reduce)."""
+
+    def __init__(
+        self,
+        model,
+        context_builder: GlobalContextBuilder,
+        token_encoder: Optional[tiktoken.Encoding] = None,
+        system_prompt: Optional[str] = None,
+        response_type: str = "multiple paragraphs",
+        model_params: Optional[Dict[str, Any]] = None,
+        context_builder_params: Optional[Dict[str, Any]] = None,
+    ):
+        self.model = model
+        self.context_builder = context_builder
+        self.token_encoder = token_encoder or tiktoken.get_encoding("cl100k_base")
+        self.system_prompt = system_prompt or GLOBAL_SINGLE_SYSTEM_PROMPT
+        self.response_type = response_type
+        self.model_params = model_params or {}
+        self.context_builder_params = context_builder_params or {}
+
+    async def search(self, query: str, **kwargs: Any) -> GlobalSearchResult:
+        start_time = time.time()
+        llm_calls, prompt_tokens, output_tokens = {}, {}, {}
+        search_prompt = ""
+
+        try:
+            context_result = await self.context_builder.build_context(
+                query=query,
+                **self.context_builder_params,
+                **kwargs,
+            )
+            llm_calls["build_context"] = context_result.llm_calls
+            prompt_tokens["build_context"] = context_result.prompt_tokens
+            output_tokens["build_context"] = context_result.output_tokens
+
+            # Build prompt + messages
+            search_prompt = self.system_prompt.format(
+                context_data=context_result.context_chunks,
+                response_type=self.response_type,
+            )
+
+            from langchain_core.messages import SystemMessage, HumanMessage
+
+            messages = [
+                SystemMessage(content=search_prompt),
+                HumanMessage(content=query),
+            ]
+
+            llm_t0 = time.time()
+            response = await _ainvoke_compatible(self.model, messages, **self.model_params)
+            llm_t1 = time.time()
+
+            search_response = response.content
+
+            llm_calls["response"] = 1
+            prompt_tokens["response"] = num_tokens(search_prompt, self.token_encoder)
+            output_tokens["response"] = num_tokens(search_response, self.token_encoder)
+
+            # Attach timing breakdown for callers (perf harness / retriever wrapper)
+            timings = dict(context_result.timings or {})
+            timings["llm_ms"] = (llm_t1 - llm_t0) * 1000.0
+
+            return GlobalSearchResult(
+                response=search_response,
+                context_data=context_result.context_records,
+                context_text=context_result.context_chunks,
+                map_responses=[],
+                reduce_context_data="",
+                reduce_context_text="",
+                completion_time=time.time() - start_time,
+                llm_calls=sum(llm_calls.values()),
+                prompt_tokens=sum(prompt_tokens.values()),
+                output_tokens=sum(output_tokens.values()),
+                llm_calls_categories=llm_calls,
+                prompt_tokens_categories=prompt_tokens,
+                output_tokens_categories=output_tokens,
+                timings=timings,
+            )
+        except Exception as e:
+            logger.exception("Exception in GlobalSearchSinglePass.search")
+            return GlobalSearchResult(
+                response=f"Error occurred during global search: {str(e)}",
+                context_data={},
+                context_text="",
+                map_responses=[],
+                reduce_context_data="",
+                reduce_context_text="",
+                completion_time=time.time() - start_time,
+                llm_calls=1,
+                prompt_tokens=num_tokens(search_prompt, self.token_encoder),
+                output_tokens=0,
+                timings={},
+            )
+
+
 class GlobalSearch:
     """Global search implementation with map-reduce processing."""
     
@@ -1467,6 +1754,7 @@ class GlobalSearch:
         context_result = await self.context_builder.build_context(
             query=query,
             **self.context_builder_params,
+            **kwargs,
         )
         llm_calls["build_context"] = context_result.llm_calls
         prompt_tokens["build_context"] = context_result.prompt_tokens
@@ -1536,15 +1824,7 @@ class GlobalSearch:
             ]
             
             async with self.semaphore:
-                # response = await self.model.ainvoke(
-                #     messages,
-                #     **llm_kwargs,
-                # )
-
-                response =  self.model.invoke(
-                    messages,
-                    **llm_kwargs,
-                )
+                response = await _ainvoke_compatible(self.model, messages, **llm_kwargs)
 
                 search_response = response.content
                 logger.debug("Map response: %s", search_response)
@@ -1696,11 +1976,7 @@ class GlobalSearch:
             #     messages,
             #     **llm_kwargs,
             # )
-
-            response = self.model.invoke(
-                messages,
-                **llm_kwargs,
-            )
+            response = await _ainvoke_compatible(self.model, messages, **llm_kwargs)
 
             search_response = response.content
             
@@ -2162,6 +2438,114 @@ class LightweightAdvancedGraphRAGRetriever:
             self.driver.close()
 
 
+class LightweightAdvancedGlobalOnlyRetriever:
+    """
+    Global-only retriever optimized for cold starts.
+
+    - Does NOT call `_load_graph_data()` (no full graph load).
+    - Fetches only top-k community reports on demand from Neo4j.
+    - Defaults to single-pass global answering (1 LLM call).
+    """
+
+    def __init__(self):
+        load_dotenv()
+
+        neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+        neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+        neo4j_db = os.getenv("CLIENT_NEO4J_DATABASE", "neo4j")
+
+        self.driver = neo4j.GraphDatabase.driver(
+            neo4j_uri,
+            auth=(neo4j_user, neo4j_password),
+            database=neo4j_db,
+        )
+        self.llm = get_llm()
+
+        self.data_loader = Neo4jDataLoader(self.driver)
+
+        self.global_context_builder = Neo4jGlobalCommunityContext(
+            data_loader=self.data_loader,
+        )
+
+        # Engines
+        self.global_search_single_pass = GlobalSearchSinglePass(
+            model=self.llm,
+            context_builder=self.global_context_builder,
+            response_type="multiple paragraphs",
+            context_builder_params={"single_batch": True},
+        )
+
+        # Map-reduce retained as optional fallback/compatibility
+        self.global_search_map_reduce = GlobalSearch(
+            model=self.llm,
+            context_builder=self.global_context_builder,
+            response_type="multiple paragraphs",
+            context_builder_params={"single_batch": False},
+        )
+
+    async def global_search_query(
+        self,
+        query: str,
+        top_k_communities: int = 8,
+        strategy: str = "single_pass",
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """
+        Perform global search query.
+
+        Args:
+            query: User query
+            top_k_communities: Number of communities to include
+            strategy: "single_pass" (default) or "map_reduce"
+        """
+        if strategy == "map_reduce":
+            result = await self.global_search_map_reduce.search(
+                query,
+                top_k_communities=top_k_communities,
+                **kwargs,
+            )
+        else:
+            result = await self.global_search_single_pass.search(
+                query,
+                top_k_communities=top_k_communities,
+                **kwargs,
+            )
+
+        timings = result.timings if isinstance(result.timings, dict) else {}
+        return {
+            "final_answer": result.response,
+            "retrieval_details": [
+                {
+                    "content": _normalize_context_text(result.context_text),
+                    "metadata": result.context_data,
+                    "method": "advanced_global",
+                    "completion_time": result.completion_time,
+                    "llm_calls": result.llm_calls,
+                    "tokens_used": result.prompt_tokens + result.output_tokens,
+                }
+            ],
+            "method": "advanced_global",
+            "performance_metrics": {
+                "completion_time": result.completion_time,
+                "llm_calls": result.llm_calls,
+                "prompt_tokens": result.prompt_tokens,
+                "output_tokens": result.output_tokens,
+                "total_tokens": result.prompt_tokens + result.output_tokens,
+                "map_responses": len(result.map_responses) if hasattr(result, "map_responses") else 0,
+                "neo4j_ms": timings.get("neo4j_ms"),
+                "context_ms": timings.get("context_ms"),
+                "llm_ms": timings.get("llm_ms"),
+                "communities_used": timings.get("communities_used"),
+            },
+        }
+
+    def close(self):
+        """Close the Neo4j driver."""
+        if hasattr(self, "driver"):
+            self.driver.close()
+
+
 # Main integration functions for benchmark compatibility
 async def query_advanced_graphrag_local(query: str, k: int = 10, **kwargs) -> Dict[str, Any]:
     """
@@ -2226,11 +2610,17 @@ async def query_advanced_graphrag_global(query: str, k: int = 8, **kwargs) -> Di
     
     # Use lightweight connection for benchmarking - no processor initialization
     try:
-        # Create a minimal retriever without processor initialization overhead
-        retriever = LightweightAdvancedGraphRAGRetriever()
-        
-        # Perform global search
-        result = await retriever.global_search_query(query, **kwargs)
+        strategy = kwargs.pop("strategy", "single_pass")
+        top_k_communities = kwargs.pop("top_k_communities", k)
+
+        retriever = LightweightAdvancedGlobalOnlyRetriever()
+
+        result = await retriever.global_search_query(
+            query,
+            top_k_communities=top_k_communities,
+            strategy=strategy,
+            **kwargs,
+        )
         
         return result
         
