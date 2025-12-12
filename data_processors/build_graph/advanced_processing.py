@@ -11,9 +11,10 @@ Supports configurable LLM models.
 import os
 import sys
 import json
+import asyncio
 from typing import List, Dict, Tuple, Any, Optional
 from graphdatascience import GraphDataScience
-from pydantic import BaseModel, Field 
+from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -65,96 +66,126 @@ class AdvancedProcessingMixin:
         self.community_summarization_enabled = True
         # Use configurable LLM
         self.llm = get_llm()
+        # Configure async concurrency for community summarization
+        self.community_summary_max_workers = int(os.getenv('COMMUNITY_SUMMARY_MAX_WORKERS', '10'))
+        # Configure async concurrency for entity summarization (30 = optimal per benchmarks)
+        self.entity_summary_max_workers = int(os.getenv('ENTITY_SUMMARY_MAX_WORKERS', '30'))
     
     # ==================== ELEMENT SUMMARIZATION ====================
     
-    def batch_summarize_entities(self, entity_summaries: Dict[str, ElementSummary], max_workers: int = 3) -> Dict[str, str]:
+    def batch_summarize_entities(self, entity_summaries: Dict[str, ElementSummary], max_workers: int = None) -> Dict[str, str]:
         """
-        Process entity summaries in batches using multithreading
+        Process entity summaries using async parallelization (wrapper for backward compatibility).
+
+        Args:
+            entity_summaries: Dict mapping entity names to ElementSummary objects
+            max_workers: Deprecated parameter (kept for compatibility, uses ENTITY_SUMMARY_MAX_WORKERS env config instead)
+
+        Returns:
+            Dict mapping entity names to generated summaries
         """
         if not self.element_summarization_enabled:
             return {}
-            
-        summaries = {}
-        
-        # Create batches
-        items = list(entity_summaries.items())
-        batch_size = 10
-        batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
-        
-        print(f"[*] Processing {len(items)} entity summaries in {len(batches)} batches...")
-        logger.info(f"Processing {len(items)} entity summaries in {len(batches)} batches...")
-        
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all batches
-            future_to_batch = {
-                executor.submit(self._process_entity_batch, batch): batch_idx 
-                for batch_idx, batch in enumerate(batches)
-            }
-            
-            # Process completed batches
-            #for future in tqdm(as_completed(future_to_batch), total=len(batches), desc="Entity summarization"):
-            logger.info(f'Total length of batches: {len(batches)}')
-            for future in as_completed(future_to_batch):
-                batch_idx = future_to_batch[future]
-                logger.info(f'Processing batch index: {batch_idx}')
-                try:
-                    batch_summaries = future.result()
-                    summaries.update(batch_summaries)
-                except Exception as e:
-                    logger.error(f"Error processing batch {batch_idx}: {e}")
-                    print(f"[WARNING] Error processing batch {batch_idx}: {e}")
-        
+
+        print(f"[*] Processing {len(entity_summaries)} entity summaries with {self.entity_summary_max_workers} concurrent workers...")
+        logger.info(f"Processing {len(entity_summaries)} entity summaries asynchronously with {self.entity_summary_max_workers} workers...")
+
+        # Run async processing
+        summaries = asyncio.run(self._process_entities_async(entity_summaries))
+
+        print(f"[OK] Generated {len(summaries)} entity summaries")
+        logger.info(f"Generated {len(summaries)} entity summaries")
+
         return summaries
-    
-    def _process_entity_batch(self, batch: List[Tuple[str, ElementSummary]]) -> Dict[str, str]:
-        """Process a batch of entities for summarization"""
-        logger.info("In _process_entity_batch")
-        batch_summaries = {}
-        
-        for entity_name, element_summary in batch:
+
+    async def _generate_entity_summary_async(
+        self,
+        entity_name: str,
+        element_summary: ElementSummary,
+        semaphore: asyncio.Semaphore
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Generate summary for a single entity asynchronously with rate limiting.
+
+        Args:
+            entity_name: Name of the entity
+            element_summary: ElementSummary object containing entity details
+            semaphore: Asyncio semaphore for concurrency control
+
+        Returns:
+            Tuple of (entity_name, summary) if successful, None otherwise
+        """
+        async with semaphore:  # Rate limit concurrent requests
             try:
-                summary = self._generate_entity_summary(element_summary)
-                if summary:
-                    batch_summaries[entity_name] = summary
-            except Exception as e:
-                print(f"[WARNING] Error summarizing entity {entity_name}: {e}")
-                logger.error(f"Error summarizing entity {entity_name}: {e}")
-        return batch_summaries
-    
-    def _generate_entity_summary(self, element_summary: ElementSummary) -> Optional[str]:
-        """Generate a summary for a single entity using LLM"""
-        logger.info("In _generate_entity_summary")
-        if not element_summary.description.strip():
-            return None
-            
-        prompt = ChatPromptTemplate.from_template("""
+                if not element_summary.description.strip():
+                    return None
+
+                prompt = ChatPromptTemplate.from_template("""
         You are an expert analyst tasked with creating comprehensive summaries of entities based on their relationships and context.
-        
+
         Entity: {entity_name}
         Type: {entity_type}
         Context: {description}
-        
+
         Create a concise but comprehensive summary of this entity that captures:
         1. What this entity is/represents
         2. Its key relationships and connections
         3. Its significance in the overall context
-        
+
         Keep the summary factual, informative, and under 200 words.
         """)
-        
-        try:
-            chain = prompt | self.llm.with_structured_output(EntitySummary)
-            result = chain.invoke({
-                "entity_name": element_summary.name,
-                "entity_type": element_summary.type,
-                "description": element_summary.description
-            })
-            return result.summary
-        except Exception as e:
-            print(f"[WARNING] LLM error for entity {element_summary.name}: {e}")
-            logger.error(f"LLM error for entity {element_summary.name}: {e}")
-            return None
+
+                try:
+                    chain = prompt | self.llm.with_structured_output(EntitySummary)
+                    # KEY CHANGE: Using async ainvoke() instead of sync invoke()
+                    result = await chain.ainvoke({
+                        "entity_name": element_summary.name,
+                        "entity_type": element_summary.type,
+                        "description": element_summary.description
+                    })
+                    return (entity_name, result.summary)
+                except Exception as e:
+                    print(f"[WARNING] LLM error for entity {element_summary.name}: {e}")
+                    logger.error(f"LLM error for entity {element_summary.name}: {e}")
+                    return None
+
+            except Exception as e:
+                logger.error(f"Error processing entity {entity_name}: {e}")
+                return None
+
+    async def _process_entities_async(
+        self,
+        entity_summaries: Dict[str, ElementSummary]
+    ) -> Dict[str, str]:
+        """
+        Process multiple entities in parallel using asyncio.
+
+        Args:
+            entity_summaries: Dict mapping entity names to ElementSummary objects
+
+        Returns:
+            Dict mapping entity names to generated summaries
+        """
+        # Create semaphore for rate limiting
+        semaphore = asyncio.Semaphore(self.entity_summary_max_workers)
+
+        # Create async tasks for all entities
+        tasks = [
+            self._generate_entity_summary_async(name, summary, semaphore)
+            for name, summary in entity_summaries.items()
+        ]
+
+        # Execute all in parallel with semaphore limiting concurrency
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Filter successful results and build summary dict
+        summaries = {}
+        for result in results:
+            if result and not isinstance(result, Exception) and result is not None:
+                entity_name, summary = result
+                summaries[entity_name] = summary
+
+        return summaries
 
     def perform_element_summarization(self, summarize_entities: bool = True, summarize_relationships: bool = False):
         """
@@ -604,21 +635,45 @@ class AdvancedProcessingMixin:
         return total_summaries
     
     def _generate_community_summaries_batch(self, communities: list, level: int) -> int:
-        """Generate summaries for a batch of communities"""
-        summaries_created = 0
-        
-        for community in communities:
+        """
+        Generate summaries for a batch of communities (wrapper for async processing).
+
+        This method provides a synchronous interface while using async processing internally
+        for parallel LLM calls with configurable concurrency control.
+        """
+        # Run the async batch processing
+        summaries_created = asyncio.run(self._process_communities_async(communities, level))
+        return summaries_created
+
+    async def _generate_single_community_summary_async(
+        self,
+        community: dict,
+        level: int,
+        semaphore: asyncio.Semaphore
+    ) -> bool:
+        """
+        Generate summary for a single community asynchronously with rate limiting.
+
+        Args:
+            community: Community data dict with id, entities, member_count
+            level: Hierarchy level of the community
+            semaphore: Asyncio semaphore for concurrency control
+
+        Returns:
+            True if summary was created successfully, False otherwise
+        """
+        async with semaphore:  # Rate limit concurrent requests
             try:
                 community_id = community['community_id']
                 entities = community['entities']
                 member_count = community['member_count']
-                
+
                 # Create context from entities
                 entity_context = "\n".join([
-                    f"- {entity['name']}: {entity['description']}" 
+                    f"- {entity['name']}: {entity['description']}"
                     for entity in entities[:20]  # Limit to prevent token overflow
                 ])
-                
+
                 # Generate summary using LLM
                 summary_prompt = f"""
                 Analyze this community of {member_count} entities at hierarchical level {level} and provide:
@@ -626,10 +681,10 @@ class AdvancedProcessingMixin:
                 2. A comprehensive summary (2-3 sentences)
                 3. An importance rating (0-10) based on entity relationships and diversity
                 4. A brief explanation of the importance rating
-                
+
                 Entities in this community:
                 {entity_context}
-                
+
                 Respond in JSON format:
                 {{
                     "title": "Community Title",
@@ -638,33 +693,33 @@ class AdvancedProcessingMixin:
                     "rating_explanation": "Explanation of why this rating was assigned"
                 }}
                 """
-                
+
                 try:
-                    response = self.llm.invoke(summary_prompt)
+                    # ASYNC LLM CALL - This is the key change!
+                    response = await self.llm.ainvoke(summary_prompt)
                     content = response.content if hasattr(response, 'content') else str(response)
-                    
+
                     # Enhanced JSON parsing for Ollama compatibility
                     import json
                     import re
-                    
+
                     # Try to extract JSON from response if it's wrapped in text
                     content = content.strip()
-                    
+
                     # Look for JSON object in the response
                     json_match = re.search(r'(\{.*?\})', content, re.DOTALL)
                     if json_match:
                         content = json_match.group(1)
-                    
+
                     # If still no valid JSON, try to extract from code blocks
                     if not content.startswith('{') and not content.startswith('['):
                         json_blocks = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE)
                         if json_blocks:
                             content = json_blocks[0]
 
-                    #logger.debug(f"Content: {content}")
                     summary_data = json.loads(content)
-                    
-                    # Update community with summary
+
+                    # Update community with summary (sync Neo4j call is fine)
                     update_query = """
                     MATCH (c:__Community__ {id: $community_id})
                     SET c.title = $title,
@@ -673,7 +728,7 @@ class AdvancedProcessingMixin:
                         c.rating_explanation = $rating_explanation,
                         c.summarized_at = datetime()
                     """
-                    
+
                     self.driver.execute_query(
                         update_query,
                         community_id=community_id,
@@ -682,19 +737,51 @@ class AdvancedProcessingMixin:
                         rating=float(summary_data.get('rating', 5.0)),
                         rating_explanation=summary_data.get('rating_explanation', 'No explanation provided')
                     )
-                    summaries_created += 1
-                    
+
+                    return True  # Success
+
                 except json.JSONDecodeError as e:
                     print(f"Could not parse JSON response for community {community_id}")
-                    logger.error(f" Could not parse JSON response for community {community_id}: {e}")
+                    logger.error(f"Could not parse JSON response for community {community_id}: {e}")
+                    return False
                 except Exception as e:
                     print(f"Error generating summary for community {community_id}: {e}")
                     logger.error(f"Error generating summary for community {community_id}: {e}")
+                    return False
+
             except Exception as e:
                 print(f"Error processing community: {e}")
                 logger.error(f"Error processing community: {e}")
+                return False
+
+    async def _process_communities_async(self, communities: list, level: int) -> int:
+        """
+        Process multiple communities in parallel using asyncio.
+
+        Args:
+            communities: List of community dicts to process
+            level: Hierarchy level
+
+        Returns:
+            Number of summaries successfully created
+        """
+        # Create semaphore for rate limiting
+        semaphore = asyncio.Semaphore(self.community_summary_max_workers)
+
+        # Create async tasks for all communities
+        tasks = [
+            self._generate_single_community_summary_async(community, level, semaphore)
+            for community in communities
+        ]
+
+        # Execute all tasks in parallel (with semaphore limiting concurrency)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Count successful summaries (True values)
+        summaries_created = sum(1 for result in results if result is True)
+
         return summaries_created
-    
+
     def create_community_hierarchy(self):
         """Create hierarchical relationships between community levels (Neo4j LLM Graph Builder style)"""
         print("[*] Creating community hierarchy...")

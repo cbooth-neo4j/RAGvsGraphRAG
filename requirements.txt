@@ -37,8 +37,13 @@ graphdatascience>=1.9.0
 retry>=0.9.2
 tqdm>=4.65.0
 pydantic>=1.10.0
-retry>=0.9.2
 networkx>=3.0
+
+# AI structured outputs and LangGraph extensions
+instructor>=1.13.0
+langgraph-checkpoint>=3.0.0
+langgraph-prebuilt>=1.0.0
+langgraph-sdk>=0.2.0
 
 #Visualizations
 matplotlib==3.10.3
