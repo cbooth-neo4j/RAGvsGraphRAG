@@ -1451,8 +1451,8 @@ class LocalSearch:
             # Build context
             context_result = self.context_builder.build_context(
                 query=query,
-                **kwargs,
                 **self.context_builder_params,
+                **kwargs,
             )
             llm_calls["build_context"] = context_result.llm_calls
             prompt_tokens["build_context"] = context_result.prompt_tokens
