@@ -11,9 +11,10 @@ Supports configurable LLM models.
 import os
 import sys
 import json
+import asyncio
 from typing import List, Dict, Tuple, Any, Optional
 from graphdatascience import GraphDataScience
-from pydantic import BaseModel, Field 
+from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -65,6 +66,8 @@ class AdvancedProcessingMixin:
         self.community_summarization_enabled = True
         # Use configurable LLM
         self.llm = get_llm()
+        # Configure async concurrency for community summarization
+        self.community_summary_max_workers = int(os.getenv('COMMUNITY_SUMMARY_MAX_WORKERS', '10'))
     
     # ==================== ELEMENT SUMMARIZATION ====================
     
@@ -604,21 +607,45 @@ class AdvancedProcessingMixin:
         return total_summaries
     
     def _generate_community_summaries_batch(self, communities: list, level: int) -> int:
-        """Generate summaries for a batch of communities"""
-        summaries_created = 0
-        
-        for community in communities:
+        """
+        Generate summaries for a batch of communities (wrapper for async processing).
+
+        This method provides a synchronous interface while using async processing internally
+        for parallel LLM calls with configurable concurrency control.
+        """
+        # Run the async batch processing
+        summaries_created = asyncio.run(self._process_communities_async(communities, level))
+        return summaries_created
+
+    async def _generate_single_community_summary_async(
+        self,
+        community: dict,
+        level: int,
+        semaphore: asyncio.Semaphore
+    ) -> bool:
+        """
+        Generate summary for a single community asynchronously with rate limiting.
+
+        Args:
+            community: Community data dict with id, entities, member_count
+            level: Hierarchy level of the community
+            semaphore: Asyncio semaphore for concurrency control
+
+        Returns:
+            True if summary was created successfully, False otherwise
+        """
+        async with semaphore:  # Rate limit concurrent requests
             try:
                 community_id = community['community_id']
                 entities = community['entities']
                 member_count = community['member_count']
-                
+
                 # Create context from entities
                 entity_context = "\n".join([
-                    f"- {entity['name']}: {entity['description']}" 
+                    f"- {entity['name']}: {entity['description']}"
                     for entity in entities[:20]  # Limit to prevent token overflow
                 ])
-                
+
                 # Generate summary using LLM
                 summary_prompt = f"""
                 Analyze this community of {member_count} entities at hierarchical level {level} and provide:
@@ -626,10 +653,10 @@ class AdvancedProcessingMixin:
                 2. A comprehensive summary (2-3 sentences)
                 3. An importance rating (0-10) based on entity relationships and diversity
                 4. A brief explanation of the importance rating
-                
+
                 Entities in this community:
                 {entity_context}
-                
+
                 Respond in JSON format:
                 {{
                     "title": "Community Title",
@@ -638,33 +665,33 @@ class AdvancedProcessingMixin:
                     "rating_explanation": "Explanation of why this rating was assigned"
                 }}
                 """
-                
+
                 try:
-                    response = self.llm.invoke(summary_prompt)
+                    # ASYNC LLM CALL - This is the key change!
+                    response = await self.llm.ainvoke(summary_prompt)
                     content = response.content if hasattr(response, 'content') else str(response)
-                    
+
                     # Enhanced JSON parsing for Ollama compatibility
                     import json
                     import re
-                    
+
                     # Try to extract JSON from response if it's wrapped in text
                     content = content.strip()
-                    
+
                     # Look for JSON object in the response
                     json_match = re.search(r'(\{.*?\})', content, re.DOTALL)
                     if json_match:
                         content = json_match.group(1)
-                    
+
                     # If still no valid JSON, try to extract from code blocks
                     if not content.startswith('{') and not content.startswith('['):
                         json_blocks = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE)
                         if json_blocks:
                             content = json_blocks[0]
 
-                    #logger.debug(f"Content: {content}")
                     summary_data = json.loads(content)
-                    
-                    # Update community with summary
+
+                    # Update community with summary (sync Neo4j call is fine)
                     update_query = """
                     MATCH (c:__Community__ {id: $community_id})
                     SET c.title = $title,
@@ -673,7 +700,7 @@ class AdvancedProcessingMixin:
                         c.rating_explanation = $rating_explanation,
                         c.summarized_at = datetime()
                     """
-                    
+
                     self.driver.execute_query(
                         update_query,
                         community_id=community_id,
@@ -682,19 +709,51 @@ class AdvancedProcessingMixin:
                         rating=float(summary_data.get('rating', 5.0)),
                         rating_explanation=summary_data.get('rating_explanation', 'No explanation provided')
                     )
-                    summaries_created += 1
-                    
+
+                    return True  # Success
+
                 except json.JSONDecodeError as e:
                     print(f"Could not parse JSON response for community {community_id}")
-                    logger.error(f" Could not parse JSON response for community {community_id}: {e}")
+                    logger.error(f"Could not parse JSON response for community {community_id}: {e}")
+                    return False
                 except Exception as e:
                     print(f"Error generating summary for community {community_id}: {e}")
                     logger.error(f"Error generating summary for community {community_id}: {e}")
+                    return False
+
             except Exception as e:
                 print(f"Error processing community: {e}")
                 logger.error(f"Error processing community: {e}")
+                return False
+
+    async def _process_communities_async(self, communities: list, level: int) -> int:
+        """
+        Process multiple communities in parallel using asyncio.
+
+        Args:
+            communities: List of community dicts to process
+            level: Hierarchy level
+
+        Returns:
+            Number of summaries successfully created
+        """
+        # Create semaphore for rate limiting
+        semaphore = asyncio.Semaphore(self.community_summary_max_workers)
+
+        # Create async tasks for all communities
+        tasks = [
+            self._generate_single_community_summary_async(community, level, semaphore)
+            for community in communities
+        ]
+
+        # Execute all tasks in parallel (with semaphore limiting concurrency)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Count successful summaries (True values)
+        summaries_created = sum(1 for result in results if result is True)
+
         return summaries_created
-    
+
     def create_community_hierarchy(self):
         """Create hierarchical relationships between community levels (Neo4j LLM Graph Builder style)"""
         print("[*] Creating community hierarchy...")
