@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Any, Optional
 from dotenv import load_dotenv
 import neo4j
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from graphdatascience import GraphDataScience
 from pydantic import BaseModel, Field
