@@ -45,14 +45,15 @@ def _fmt_ms(x: Optional[float]) -> str:
     return f"{x:.0f}ms"
 
 
-def _fmt_pct_improvement(after: Optional[float], before: Optional[float]) -> str:
+def _fmt_pct_speedup(after: Optional[float], before: Optional[float]) -> str:
     """
-    Percent improvement where LOWER is better (latency, call count).
+    Percent speed-up where LOWER is better (latency, call count).
+    Formula: (before/after - 1) * 100
     Positive means faster / fewer; negative means regression.
     """
-    if after is None or before is None or before == 0:
+    if after is None or before is None or after == 0:
         return "n/a"
-    pct = (before - after) / before * 100.0
+    pct = (before / after - 1.0) * 100.0
     sign = "+" if pct >= 0 else ""
     return f"{sign}{pct:.0f}%"
 
@@ -104,23 +105,23 @@ def main() -> int:
 
     lines.append("### Summary (p50 / p95)")
     lines.append("")
-    lines.append("| Metric | Before p50 | After p50 | Delta | Before p95 | After p95 | Delta |")
+    lines.append("| Metric | Before p50 | After p50 | Speed-up | Before p95 | After p95 | Speed-up |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|")
     lines.append(
-        f"| total_ms | {_fmt_ms(before_total['p50'])} | {_fmt_ms(after_total['p50'])} | {_fmt_pct_improvement(after_total['p50'], before_total['p50'])} | "
-        f"{_fmt_ms(before_total['p95'])} | {_fmt_ms(after_total['p95'])} | {_fmt_pct_improvement(after_total['p95'], before_total['p95'])} |"
+        f"| total_ms | {_fmt_ms(before_total['p50'])} | {_fmt_ms(after_total['p50'])} | {_fmt_pct_speedup(after_total['p50'], before_total['p50'])} | "
+        f"{_fmt_ms(before_total['p95'])} | {_fmt_ms(after_total['p95'])} | {_fmt_pct_speedup(after_total['p95'], before_total['p95'])} |"
     )
     lines.append(
-        f"| llm_ms | {_fmt_ms(before_llm['p50'])} | {_fmt_ms(after_llm['p50'])} | {_fmt_pct_improvement(after_llm['p50'], before_llm['p50'])} | "
-        f"{_fmt_ms(before_llm['p95'])} | {_fmt_ms(after_llm['p95'])} | {_fmt_pct_improvement(after_llm['p95'], before_llm['p95'])} |"
+        f"| llm_ms | {_fmt_ms(before_llm['p50'])} | {_fmt_ms(after_llm['p50'])} | {_fmt_pct_speedup(after_llm['p50'], before_llm['p50'])} | "
+        f"{_fmt_ms(before_llm['p95'])} | {_fmt_ms(after_llm['p95'])} | {_fmt_pct_speedup(after_llm['p95'], before_llm['p95'])} |"
     )
     lines.append(
-        f"| neo4j_ms | {_fmt_ms(before_neo4j['p50'])} | {_fmt_ms(after_neo4j['p50'])} | {_fmt_pct_improvement(after_neo4j['p50'], before_neo4j['p50'])} | "
-        f"{_fmt_ms(before_neo4j['p95'])} | {_fmt_ms(after_neo4j['p95'])} | {_fmt_pct_improvement(after_neo4j['p95'], before_neo4j['p95'])} |"
+        f"| neo4j_ms | {_fmt_ms(before_neo4j['p50'])} | {_fmt_ms(after_neo4j['p50'])} | {_fmt_pct_speedup(after_neo4j['p50'], before_neo4j['p50'])} | "
+        f"{_fmt_ms(before_neo4j['p95'])} | {_fmt_ms(after_neo4j['p95'])} | {_fmt_pct_speedup(after_neo4j['p95'], before_neo4j['p95'])} |"
     )
     lines.append(
-        f"| llm_calls | {before_calls['p50'] if before_calls['p50'] is not None else 'n/a'} | {after_calls['p50'] if after_calls['p50'] is not None else 'n/a'} | {_fmt_pct_improvement(after_calls['p50'], before_calls['p50'])} | "
-        f"{before_calls['p95'] if before_calls['p95'] is not None else 'n/a'} | {after_calls['p95'] if after_calls['p95'] is not None else 'n/a'} | {_fmt_pct_improvement(after_calls['p95'], before_calls['p95'])} |"
+        f"| llm_calls | {before_calls['p50'] if before_calls['p50'] is not None else 'n/a'} | {after_calls['p50'] if after_calls['p50'] is not None else 'n/a'} | {_fmt_pct_speedup(after_calls['p50'], before_calls['p50'])} | "
+        f"{before_calls['p95'] if before_calls['p95'] is not None else 'n/a'} | {after_calls['p95'] if after_calls['p95'] is not None else 'n/a'} | {_fmt_pct_speedup(after_calls['p95'], before_calls['p95'])} |"
     )
     lines.append("")
 

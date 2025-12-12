@@ -8,8 +8,8 @@ We optimized the **global** GraphRAG retrieval path to reduce both **cold-start 
 - **After**: global-only retriever that fetches **top‑k communities per query** and answers in **one LLM call**.
 
 Measured on the same query set in the same environment:
-- **Median latency** improved from **~28.5s → ~7.1s** (**~75% reduction**)
-- **P95 latency** improved from **~30.0s → ~11.6s** (**~62% reduction**)
+- **Median latency** improved from **~28.5s → ~7.1s** (**~304% speed-up**)
+- **P95 latency** improved from **~30.0s → ~11.6s** (**~160% speed-up**)
 - **LLM calls** reduced from **3 → 1** per global query
 
 Reference comparison output: [`benchmark/results/global_before_after_report.md`](../benchmark/results/global_before_after_report.md)
