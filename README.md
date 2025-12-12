@@ -168,6 +168,29 @@ python benchmark/ragas_benchmark.py --hybrid-cypher --jsonl my.jsonl  # Uses cus
 - **Charts**: `benchmark_outputs/` folder (performance comparisons)
 - **Detailed Reports**: HTML reports with individual Q&A analysis
 
+## ⚡ Global retriever performance benchmarking (before/after)
+
+The repo includes a small harness to benchmark **Advanced GraphRAG global search** before/after optimizations and generate a markdown summary.
+
+### Run benchmarks
+
+```bash
+# Optimized (global-only + single-pass, 1 LLM call)
+python -m benchmark.perf_global_search --impl optimized --runs 1 --cold-start --strategy single_pass
+
+# Baseline (legacy full-graph + map-reduce)
+python -m benchmark.perf_global_search --impl baseline --runs 1 --cold-start --strategy map_reduce
+```
+
+### Generate a markdown comparison report
+
+```bash
+python -m benchmark.report_global_perf \
+  --before benchmark/results/<baseline_json>.json \
+  --after benchmark/results/<optimized_json>.json \
+  --out benchmark/results/global_before_after_report.md
+```
+
 ## 🎯 Key Features
 
 ### **🧠 Research-Based Entity Discovery**
