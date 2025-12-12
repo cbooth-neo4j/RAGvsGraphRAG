@@ -106,18 +106,20 @@ Recommended upgrade:
 
 This should reduce DB time and improve relevance at the same time.
 
-## Related changes merged (graph creation performance)
+## Graph creation + global retrieval: end-to-end performance update
 
-While the focus of this report is **global retrieval**, we also merged an upstream PR that materially improves **graph construction time** (community/entity summarization) via async processing:
+This optimization work covered the **full GraphRAG pipeline path** that users experience:
+- **Ingestion/build time** (community/entity summarization during graph creation)
+- **Query time** (global retrieval + synthesis)
 
-- **PR #3**: *Optimize graph creation with async processing and update dependencies* (merged into `main`)
-  - `6e80caf`: **Asynchronous community summarization processing**
-  - `e5a6686`: **Async entity summarization + configurable concurrency**
-  - `8e0bc24`: Import path refactor for `RecursiveCharacterTextSplitter`
-  - `09ea3bc`: PDF processing import/error-message fix
-  - `f97f8ef`: Requirements updates for structured outputs / LangGraph components
+On the ingestion/build side, we merged PR #3 (*Optimize graph creation with async processing and update dependencies*), which reduces **community creation** time by introducing async processing and configurable concurrency:
+- `6e80caf`: **Asynchronous community summarization processing**
+- `e5a6686`: **Async entity summarization + configurable concurrency**
+- `8e0bc24`: Import path refactor for `RecursiveCharacterTextSplitter`
+- `09ea3bc`: PDF processing import/error-message fix
+- `f97f8ef`: Requirements updates for structured outputs / LangGraph components
 
-These changes primarily reduce **community creation** runtime during ingestion/build steps and are complementary to the global retriever optimizations above.
+On the query side, the global retriever changes described earlier reduce end-user latency primarily by cutting global search from **N+1 LLM calls to 1** and avoiding eager full-graph loads.
 
 ### 2) Add full timing breakdown to map/reduce (optional)
 
