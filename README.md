@@ -5,13 +5,13 @@
 A comprehensive evaluation framework comparing various RAG approaches using the RAGAS evaluation framework with research-based enhancements.
 
 ### **🔍 Retrieval Approaches**
-1. **ChromaDB RAG** - Traditional vector similarity search
-2. **GraphRAG** - Multi-hop graph traversal with entity resolution  
-3. **Advanced GraphRAG** - Community detection and element summarization
-4. **Text2Cypher** - Natural language to Cypher query translation
-5. **Neo4j Vector** - Graph database vector search
-6. **Hybrid Cypher** - Combined vector + graph traversal
-7. **DRIFT GraphRAG** - Dynamic reasoning with iterative fact-finding
+1. **ChromaDB RAG** - Traditional vector similarity search (`--chroma`)
+2. **GraphRAG** - Multi-hop graph traversal with entity resolution (`--graphrag`)
+3. **Advanced GraphRAG** - Community detection and element summarization (`--advanced-graphrag`)
+4. **Text2Cypher** - Natural language to Cypher query translation (`--text2cypher`)
+5. **Neo4j Vector** - Graph database vector search (`--neo4j-vector`)
+6. **Hybrid Cypher** - Combined vector + graph traversal (`--hybrid-cypher`)
+7. **DRIFT GraphRAG** - Dynamic reasoning with iterative fact-finding (`--drift-graphrag`)
 
 ### **🧠 Ontology & Entity Discovery**
 - **Research-based corpus sampling** with TF-IDF clustering and stratified selection

@@ -44,6 +44,7 @@ except ImportError:
 # RAGAS imports
 from ragas import EvaluationDataset, evaluate
 from ragas.llms import LangchainLLMWrapper
+from ragas.embeddings import LangchainEmbeddingsWrapper
 # Universal metrics that work fairly across all retriever types (chunk-based and graph-based)
 from ragas.metrics import ResponseRelevancy, FactualCorrectness, SemanticSimilarity
 
@@ -295,6 +296,8 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         # Prepare evaluator LLM with timeout configuration
         # Use the centralized LLM configuration instead of hardcoded VertexAI
         evaluator_llm = LangchainLLMWrapper(llm)
+        # Prepare embeddings wrapper for metrics that require embeddings (ResponseRelevancy, SemanticSimilarity)
+        evaluator_embeddings = LangchainEmbeddingsWrapper(embeddings)
         
         # Configure timeout for Ollama if needed
         timeout_attrs = ['timeout', 'request_timeout', 'read_timeout']
@@ -393,6 +396,7 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                             dataset=evaluation_dataset,
                             metrics=metrics,
                             llm=evaluator_llm,
+                            embeddings=evaluator_embeddings,  # Required for ResponseRelevancy & SemanticSimilarity
                             raise_exceptions=False  # Don't fail entire evaluation on single errors
                         )
                         return result
@@ -423,6 +427,7 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                                 dataset=evaluation_dataset,
                                 metrics=reduced_metrics,
                                 llm=evaluator_llm,
+                                embeddings=evaluator_embeddings,
                                 raise_exceptions=False
                             )
                             print(f"   OK Reduced metric evaluation succeeded")
@@ -442,9 +447,10 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
             print(f"   Raw DataFrame columns: {df.columns.tolist()}")
             
             # Only calculate mean for numeric metric columns
+            # Updated to include universal metrics: response_relevancy, factual_correctness, semantic_similarity
             numeric_cols = []
             for col in df.columns:
-                if any(metric in col.lower() for metric in ['context_recall', 'faithfulness', 'factual_correctness', 'precision', 'relevance']):
+                if any(metric in col.lower() for metric in ['factual_correctness', 'answer_relevancy', 'response_relevancy', 'semantic_similarity', 'context_recall', 'faithfulness', 'precision', 'relevance']):
                     try:
                         pd.to_numeric(df[col], errors='raise')
                         numeric_cols.append(col)
