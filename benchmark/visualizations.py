@@ -61,7 +61,7 @@ def create_visualizations(comparison_table: pd.DataFrame, output_dir: str = "ben
     
     # Add description of what RAGAS measures
     plt.figtext(0.5, 0.02, 
-                'RAGAS Score: Average of Context Recall, Faithfulness, and Factual Correctness metrics', 
+                'RAGAS Score: Average of Response Relevancy, Factual Correctness, and Semantic Similarity metrics', 
                 ha='center', fontsize=10, style='italic', color='gray')
     
     # Add winner annotation
@@ -110,11 +110,11 @@ def create_visualizations(comparison_table: pd.DataFrame, output_dir: str = "ben
     plt.grid(axis='y', alpha=0.3, linestyle='--')
     plt.ylim(0, 1.1)
     
-    # Add metric descriptions
+    # Add metric descriptions (updated for universal metrics)
     metric_descriptions = {
-        'Context Recall': 'How well the system finds relevant information',
-        'Faithfulness': 'How faithful the answer is to retrieved context',
-        'Factual Correctness': 'How accurate the answer is compared to ground truth'
+        'Response Relevancy': 'How well the answer addresses the question asked',
+        'Factual Correctness': 'How accurate the facts are compared to ground truth',
+        'Semantic Similarity': 'How well the meaning matches the expected answer'
     }
     
     # Add descriptions below x-axis labels

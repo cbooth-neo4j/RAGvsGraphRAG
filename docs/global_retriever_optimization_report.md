@@ -50,8 +50,6 @@ Reference comparison output: [`benchmark/results/global_before_after_report.md`]
 
 ## Before/after performance (measured)
 
-Comparison file: [`benchmark/results/global_before_after_report.md`](../benchmark/results/global_before_after_report.md)
-
 Key deltas observed:
 - **Total time**: ~28.5s median → ~7.1s median
 - **LLM calls**: 3 → 1

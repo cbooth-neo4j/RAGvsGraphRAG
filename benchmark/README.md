@@ -17,10 +17,10 @@ python benchmark/ragas_benchmark.py --all --jsonl path/to/benchmark.jsonl
 
 ## 📊 Evaluation Framework
 
-### **RAGAS Metrics**
-- **Context Recall**: How well retrieved context covers ground truth
-- **Faithfulness**: Whether response is grounded in retrieved context  
-- **Factual Correctness**: Accuracy of factual claims in response
+### **RAGAS Metrics** (Universal - Fair for All Retriever Types)
+- **Response Relevancy**: How well the answer addresses the question asked
+- **Factual Correctness**: Accuracy of facts compared to ground truth  
+- **Semantic Similarity**: How well the meaning matches the expected answer
 
 ### **Retrieval Approaches Tested**
 1. **ChromaDB RAG** - Traditional vector similarity search
@@ -141,8 +141,8 @@ python benchmark/ragas_benchmark.py --all --jsonl my_benchmark.jsonl
 ## 📊 Interpreting Results
 
 ### **Key Metrics to Watch**
-- **Context Recall > 0.8** - Good retrieval coverage
-- **Faithfulness > 0.9** - Responses stay grounded
+- **Response Relevancy > 0.8** - Answers address the question well
+- **Semantic Similarity > 0.8** - Answers match expected meaning
 - **Factual Correctness > 0.7** - Accurate information
 
 ### **Approach Comparisons**

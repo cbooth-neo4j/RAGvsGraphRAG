@@ -44,7 +44,8 @@ except ImportError:
 # RAGAS imports
 from ragas import EvaluationDataset, evaluate
 from ragas.llms import LangchainLLMWrapper
-from ragas.metrics import LLMContextRecall, Faithfulness, FactualCorrectness
+# Universal metrics that work fairly across all retriever types (chunk-based and graph-based)
+from ragas.metrics import ResponseRelevancy, FactualCorrectness, SemanticSimilarity
 
 # Import our RAG systems from the new retrievers module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -225,8 +226,8 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                     if neighbor_summaries:
                         content = f"Anchor: {str(anchor)[:200]} | Neighbors: " + ", ".join(map(str, neighbor_summaries[:20]))
                 if content:
-                    if len(content) > 1000:
-                        content = content[:1000] + "..."
+                    # Note: Removed 1000 char truncation - full context needed for fair evaluation
+                    # Truncation was causing loss of important information for RAGAS metrics
                     retrieved_contexts.append(content)
             
             # Ensure we have at least some context
@@ -312,13 +313,14 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
             if env_timeout:
                 print(f"   Environment timeout: {env_timeout}s")
         
-        # Use basic metrics with timeout configuration
+        # Use universal metrics that work fairly across all retriever types
+        # These don't penalize GraphRAG for using synthesized context vs raw chunks
         metric_timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '300'))  # 5 minutes per metric
         
         metrics = [
-            LLMContextRecall(),
-            Faithfulness(),
-            FactualCorrectness()
+            ResponseRelevancy(),      # Does the response address the question?
+            FactualCorrectness(),     # Are the facts in the response correct?
+            SemanticSimilarity()      # Does the response meaning match ground truth?
         ]
         
         # Configure timeout for each metric if supported
@@ -416,7 +418,7 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                         
                         # Try with just one metric as fallback
                         try:
-                            reduced_metrics = [Faithfulness()]  # Most reliable metric
+                            reduced_metrics = [FactualCorrectness()]  # Most reliable metric
                             result = evaluate(
                                 dataset=evaluation_dataset,
                                 metrics=reduced_metrics,
@@ -475,9 +477,9 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         if not scores:
             print(f"   WARNING: No scores found, using default values")
             return {
-                'context_recall': 0.0,
-                'faithfulness': 0.0,
-                'factual_correctness': 0.0
+                'response_relevancy': 0.0,
+                'factual_correctness': 0.0,
+                'semantic_similarity': 0.0
             }
         
         for key, value in scores.items():
@@ -485,13 +487,13 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                 # Convert value to float
                 numeric_value = float(value) if (value is not None and not (isinstance(value, float) and math.isnan(value))) else 0.0
                 
-                # Map to our expected metric names
-                if 'context_recall' in key.lower():
-                    mapped_scores['context_recall'] = numeric_value
-                elif 'faithfulness' in key.lower():
-                    mapped_scores['faithfulness'] = numeric_value
+                # Map to our expected metric names (universal metrics)
+                if 'response_relevancy' in key.lower() or 'answer_relevancy' in key.lower():
+                    mapped_scores['response_relevancy'] = numeric_value
                 elif 'factual_correctness' in key.lower():
                     mapped_scores['factual_correctness'] = numeric_value
+                elif 'semantic_similarity' in key.lower():
+                    mapped_scores['semantic_similarity'] = numeric_value
                 else:
                     # Keep original key as fallback
                     mapped_scores[key.lower()] = numeric_value
@@ -511,9 +513,9 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         
         # Return default scores if evaluation fails
         return {
-            'context_recall': 0.0,
-            'faithfulness': 0.0,
-            'factual_correctness': 0.0
+            'response_relevancy': 0.0,
+            'factual_correctness': 0.0,
+            'semantic_similarity': 0.0
         }
 
 def create_comparison_table_simple(chroma_results: Dict, graphrag_results: Dict) -> pd.DataFrame:
@@ -534,11 +536,11 @@ def create_comparison_table_simple(chroma_results: Dict, graphrag_results: Dict)
     graphrag_values = []
     improvements = []
     
-    # Map metric names to display names
+    # Map metric names to display names (universal metrics)
     metric_display_names = {
-        'context_recall': 'Context Recall',
-        'faithfulness': 'Faithfulness', 
-        'factual_correctness': 'Factual Correctness'
+        'response_relevancy': 'Response Relevancy',
+        'factual_correctness': 'Factual Correctness', 
+        'semantic_similarity': 'Semantic Similarity'
     }
     
     for metric_key, display_name in metric_display_names.items():
@@ -585,11 +587,11 @@ def create_multi_approach_comparison_table(results_dict: Dict[str, Dict], approa
     for approach_key in approach_scores.keys():
         approach_columns[approach_names.get(approach_key, approach_key)] = []
     
-    # Map metric names to display names
+    # Map metric names to display names (universal metrics)
     metric_display_names = {
-        'context_recall': 'Context Recall',
-        'faithfulness': 'Faithfulness', 
-        'factual_correctness': 'Factual Correctness'
+        'response_relevancy': 'Response Relevancy',
+        'factual_correctness': 'Factual Correctness', 
+        'semantic_similarity': 'Semantic Similarity'
     }
     
     for metric_key, display_name in metric_display_names.items():
@@ -628,8 +630,8 @@ def create_three_way_comparison_table(chroma_results: Dict, graphrag_results: Di
     
     # Map metric names to display names
     metric_display_names = {
-        'context_recall': 'Context Recall',
-        'faithfulness': 'Faithfulness', 
+        'response_relevancy': 'Response Relevancy',
+        'semantic_similarity': 'Semantic Similarity', 
         'factual_correctness': 'Factual Correctness'
     }
     
