@@ -211,39 +211,53 @@ class GraphOperationsMixin:
                     logger.error(f"Unable to create  full-text search indexes. {traceback.print_exc()}. Failed with exception {e}")
                     print(f"Index may already exist: {e}")
             
+            # Drop existing vector indexes first to handle dimension changes
+            drop_indexes = [
+                "DROP INDEX document_embeddings IF EXISTS",
+                "DROP INDEX chunk_embeddings IF EXISTS",
+                "DROP INDEX entity_embeddings IF EXISTS",
+                "DROP INDEX entity_embeddings_old IF EXISTS"
+            ]
+            
+            for drop_query in drop_indexes:
+                try:
+                    session.run(drop_query)
+                except Exception:
+                    pass  # Index may not exist, that's fine
+            
             # Create vector indexes for embeddings with dynamic dimensions
             vector_indexes = [
-                """
+                f"""
                 CREATE VECTOR INDEX document_embeddings 
                 FOR (d:Document) ON (d.embedding)
-                OPTIONS {indexConfig: {
-                    `vector.dimensions`: 768,
+                OPTIONS {{indexConfig: {{
+                    `vector.dimensions`: {vector_dimensions},
                     `vector.similarity_function`: 'cosine'
-                }}
+                }}}}
                 """,
-                """
+                f"""
                 CREATE VECTOR INDEX chunk_embeddings 
                 FOR (c:Chunk) ON (c.embedding)
-                OPTIONS {indexConfig: {
-                    `vector.dimensions`: 768,
+                OPTIONS {{indexConfig: {{
+                    `vector.dimensions`: {vector_dimensions},
                     `vector.similarity_function`: 'cosine'
-                }}
+                }}}}
                 """,
-                """
+                f"""
                 CREATE VECTOR INDEX entity_embeddings_old
                 FOR (e:Entity) ON (e.embedding)
-                OPTIONS {indexConfig: {
-                    `vector.dimensions`: 768,
+                OPTIONS {{indexConfig: {{
+                    `vector.dimensions`: {vector_dimensions},
                     `vector.similarity_function`: 'cosine'
-                }}
+                }}}}
                 """,
-                """
+                f"""
                 CREATE VECTOR INDEX entity_embeddings
                 FOR (e:__Entity__) ON (e.embedding)
-                OPTIONS {indexConfig: {
-                    `vector.dimensions`: 768,
+                OPTIONS {{indexConfig: {{
+                    `vector.dimensions`: {vector_dimensions},
                     `vector.similarity_function`: 'cosine'
-                }}
+                }}}}
                 """
             ]
 
