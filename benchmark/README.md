@@ -5,14 +5,14 @@ Comprehensive evaluation framework for comparing RAG approaches using RAGAS metr
 ## 🚀 Quick Start
 
 ```bash
-# Run full benchmark comparison
+# Run full benchmark comparison (default CSV)
 python benchmark/ragas_benchmark.py --all
 
 # Run specific retrievers
 python benchmark/ragas_benchmark.py --chroma --graphrag
 
-# Use custom benchmark data
-python benchmark/ragas_benchmark.py --all --jsonl path/to/benchmark.jsonl
+# Use HotpotQA benchmark (recommended for research)
+python -m benchmark.hotpotqa.benchmark_pipeline smoke
 ```
 
 ## 📊 Evaluation Framework
@@ -29,45 +29,59 @@ python benchmark/ragas_benchmark.py --all --jsonl path/to/benchmark.jsonl
 4. **Text2Cypher** - Natural language to Cypher query translation
 5. **Neo4j Vector** - Graph database vector search
 6. **Hybrid Cypher** - Combined vector + graph traversal
+7. **DRIFT GraphRAG** - Dynamic reasoning with iterative refinement
 
-## 🧪 RAGBench Integration
+## 🧪 HotpotQA Benchmark (Recommended)
 
-### **Dataset Processing**
+The HotpotQA fullwiki benchmark provides a rigorous, research-grade evaluation using ~7,400 multi-hop reasoning questions with Wikipedia articles.
+
+### **Quick Start**
 ```bash
-# Process RAGBench dataset
-python data_processors/process_data.py --ragbench --preset nano
+# Smoke test (50 questions, ~$5, ~15 min)
+python -m benchmark.hotpotqa.benchmark_pipeline smoke
 
-# This creates benchmark data automatically
-# -> benchmark/ragbench__nano_benchmark.jsonl
+# Development benchmark (500 questions, ~$20, ~1 hour)
+python -m benchmark.hotpotqa.benchmark_pipeline dev
+
+# Full evaluation (all ~7400 questions)
+python -m benchmark.hotpotqa.benchmark_pipeline full
 ```
 
-### **Evaluation Pipeline**
+### **Available Presets**
+
+| Preset | Questions | Retrievers | Est. Cost | Est. Time |
+|--------|-----------|------------|-----------|-----------|
+| `mini` | 10 | ChromaDB only | $1 | 5 min |
+| `smoke` | 50 | ChromaDB, GraphRAG | $5 | 15 min |
+| `dev` | 500 | All main retrievers | $20 | 60 min |
+| `full` | ~7400 | All retrievers | $100+ | 5+ hours |
+
+### **CLI Options**
 ```bash
-# 1. Process data
-python data_processors/process_data.py --ragbench --preset micro --domain financial
+# Test specific retrievers
+python -m benchmark.hotpotqa.benchmark_pipeline dev --retrievers chroma graphrag hybrid_cypher
 
-# 2. Run evaluation  
-python benchmark/ragas_benchmark.py --all --jsonl benchmark/ragbench__micro_benchmark.jsonl
+# Skip ingestion if graph already populated
+python -m benchmark.hotpotqa.benchmark_pipeline dev --skip-ingestion
 
-# 3. View results
-# -> benchmark_outputs/detailed_metrics_comparison.png
-# -> benchmark_outputs/overall_performance_comparison.png
+# List available presets
+python -m benchmark.hotpotqa.benchmark_pipeline --list-presets
 ```
+
+See [hotpotqa/README.md](hotpotqa/README.md) for detailed HotpotQA documentation.
 
 ## 📁 Components
 
 ### **Core Benchmarking**
 - **`ragas_benchmark.py`** - Main evaluation CLI with RAGAS integration
 - **`visualizations.py`** - Chart generation and performance analysis
-- **`benchmark.csv`** - Default benchmark dataset (legacy)
+- **`benchmark.csv`** - Default benchmark dataset (simple Q&A)
 
-### **RAGBench Integration** (`ragbench/`)
-- **`simple_ingester.py`** - RAGBench dataset processor
-- **`evaluator.py`** - Q&A data preparation for evaluation
-- **`results_formatter.py`** - Human-readable evaluation reports
-- **`configs.py`** - Preset configurations (nano, micro, small, etc.)
-
-See [ragbench/README.md](ragbench/README.md) for RAGBench details.
+### **HotpotQA Integration** (`hotpotqa/`)
+- **`data_loader.py`** - Downloads HotpotQA questions + Wikipedia articles
+- **`wiki_ingester.py`** - Ingests Wikipedia corpus into Neo4j graph
+- **`benchmark_pipeline.py`** - Main orchestrator with 5-phase pipeline
+- **`configs.py`** - Preset configurations (smoke, dev, full)
 
 ## 📈 Output Formats
 
@@ -85,7 +99,7 @@ See [ragbench/README.md](ragbench/README.md) for RAGBench details.
 ## ⚙️ Configuration
 
 ### **Model Configuration**
-The benchmark system now uses centralized model configuration via environment variables:
+The benchmark system uses centralized model configuration via environment variables:
 
 ```bash
 # Copy the example configuration
@@ -93,7 +107,7 @@ cp env.example .env
 
 # Edit .env to configure your models
 LLM_PROVIDER=ollama          # or 'openai'
-LLM_MODEL=llama3.1:8b          # or 'gpt-4o-mini'
+LLM_MODEL=llama3.1:8b        # or 'gpt-4o-mini'
 EMBEDDING_PROVIDER=ollama    # or 'openai'
 EMBEDDING_MODEL=nomic-embed-text  # or 'text-embedding-3-small'
 ```
@@ -107,8 +121,8 @@ EMBEDDING_MODEL=nomic-embed-text  # or 'text-embedding-3-small'
 - Embeddings: `text-embedding-3-small`, `text-embedding-3-large`
 
 ### **Benchmark Data Sources**
-1. **Default CSV** - Simple question/ground_truth format
-2. **RAGBench JSONL** - Rich metadata with domain, dataset, record IDs
+1. **HotpotQA** - Research-grade multi-hop questions with Wikipedia (recommended)
+2. **Default CSV** - Simple question/ground_truth format for quick tests
 3. **Custom JSONL** - Your own benchmark questions
 
 ### **Evaluation Settings**
@@ -120,16 +134,14 @@ EMBEDDING_MODEL=nomic-embed-text  # or 'text-embedding-3-small'
 
 ### **Development Testing**
 ```bash
-# Quick test with nano dataset
-python data_processors/process_data.py --ragbench --preset nano
-python benchmark/ragas_benchmark.py --chroma --graphrag
+# Quick test with default CSV
+python benchmark/ragas_benchmark.py --chroma --graphrag --limit 5
 ```
 
 ### **Research Evaluation**
 ```bash
-# Comprehensive evaluation
-python data_processors/process_data.py --ragbench --preset small --domain financial
-python benchmark/ragas_benchmark.py --all --output-dir results/financial/
+# HotpotQA benchmark for publication-quality results
+python -m benchmark.hotpotqa.benchmark_pipeline dev --retrievers chroma graphrag hybrid_cypher advanced_graphrag
 ```
 
 ### **Custom Benchmarks**
@@ -148,8 +160,9 @@ python benchmark/ragas_benchmark.py --all --jsonl my_benchmark.jsonl
 ### **Approach Comparisons**
 - **ChromaDB** - Fast, good for semantic similarity
 - **GraphRAG** - Better for complex, multi-hop questions
-- **Text2Cypher** - Excellent for structured data queries
-- **Hybrid** - Balanced performance across question types
+- **Advanced GraphRAG** - Best for global/summarization queries
+- **Hybrid Cypher** - Balanced performance across question types
+- **DRIFT** - Excellent for iterative refinement needs
 
 ## 🔧 Troubleshooting
 
@@ -158,20 +171,22 @@ python benchmark/ragas_benchmark.py --all --jsonl my_benchmark.jsonl
 - **RAGAS import error**: Install ragas package
 - **Empty results**: Check if data was processed correctly
 - **API limits**: Reduce batch size or use rate limiting
+- **wikipedia-api not found**: Run `pip install wikipedia-api`
 
 ### **Performance Tips**
-- Start with **nano** preset for quick validation
+- Start with **smoke** preset for quick validation
 - Use **selective testing** during development
 - Run **full evaluation** only for final results
 - Monitor **API costs** with larger datasets
+- Use **--skip-ingestion** if graph is already populated
 
 ## 🚀 Advanced Features
 
 ### **Domain-Specific Evaluation**
+- Multi-hop reasoning questions (HotpotQA)
 - Financial document analysis
 - Medical literature processing  
 - Legal document understanding
-- Technical specification parsing
 
 ### **Custom Metrics**
 - Extend RAGAS with domain-specific metrics

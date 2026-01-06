@@ -345,7 +345,8 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                                  domain_hint: Optional[str] = None,
                                  prompt_for_advanced: bool = True,
                                  auto_advanced: bool = False,
-                                 mode: str = 'fresh') -> Dict[str, Any]:
+                                 mode: str = 'fresh',
+                                 doc_prefix: str = 'ragbench') -> Dict[str, Any]:
         """
         Process RAGBench documents with enhanced entity discovery.
         
@@ -421,8 +422,8 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
         
         for i, (text, source) in enumerate(zip(texts, sources)):
             try:
-                doc_name = f"ragbench_{source}_{i}"
-                result = self.process_text_document(text, doc_name, f"ragbench:{source}")
+                doc_name = f"{doc_prefix}_{source}_{i}"
+                result = self.process_text_document(text, doc_name, f"{doc_prefix}:{source}")
                 results.append(result)
                 total_chunks += result['chunks_created']
                 total_entities += result['entities_created']
@@ -433,7 +434,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             except Exception as e:
                 print(f"[ERROR] Failed to process document {i}: {e}")
                 results.append({
-                    'document_id': f"failed_ragbench_{i}",
+                    'document_id': f"failed_{doc_prefix}_{i}",
                     'error': str(e),
                     'processing_status': 'failed'
                 })

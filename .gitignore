@@ -57,6 +57,8 @@ PDFs/
 !PDFs/.gitkeep
 benchmark_outputs/
 schema_cache.json
+data/hotpotqa/
+benchmark/ragbench/data/
 
 # Byte-compiled / optimized / DLL files
 *.py[codz]
@@ -257,3 +259,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+mcp.json

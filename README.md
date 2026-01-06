@@ -19,11 +19,11 @@ A comprehensive evaluation framework comparing various RAG approaches using the 
 - **Multi-strategy text sampling** for optimal entity type discovery
 - **Quality metrics** and performance analysis
 
-### **🧪 RAGBench Integration**
-- **Multiple dataset presets** from nano (10 docs) to full (60K docs)
-- **Domain-specific benchmarks** with rich metadata
-- **JSONL format** for flexible evaluation data
-- **Automated Q&A pair generation** for evaluation
+### **🧪 HotpotQA Benchmark Integration**
+- **Multi-hop reasoning questions** from the HotpotQA fullwiki dataset (~7,400 questions)
+- **Wikipedia corpus** - Articles downloaded and ingested automatically
+- **Research-grade evaluation** - Rigorous testing with ground truth answers
+- **Multiple presets** from smoke (50 questions) to full (7,400 questions)
 
 All approaches are evaluated using RAGAS framework with automated visualizations and comprehensive performance metrics.
 
@@ -31,6 +31,7 @@ All approaches are evaluated using RAGAS framework with automated visualizations
 - **GraphRAG Patterns**: [Neo4j GraphRAG Field Guide](https://neo4j.com/blog/developer/graphrag-field-guide-rag-patterns/)
 - **Microsoft GraphRAG**: [Community Summary Retrievers](https://graphrag.com/reference/graphrag/global-community-summary-retriever/)
 - **DRIFT Algorithm**: [Microsoft DRIFT Research](https://www.microsoft.com/en-us/research/blog/introducing-drift-search-combining-global-and-local-search-methods-to-improve-quality-and-efficiency/)
+- **HotpotQA**: [Multi-hop Question Answering Dataset](https://hotpotqa.github.io/)
 - **Entity Discovery**: 2025 research in ontology discovery and active learning
 
 ## 📁 Project Structure
@@ -46,8 +47,7 @@ RAGvsGraphRAG/
 │   │   ├── graph_operations.py     # Neo4j operations & entity resolution
 │   │   └── README.md               # Technical deep-dive documentation
 │   ├── chroma_processor.py         # ChromaDB vector processing
-│   ├── graph_processor.py          # Legacy processor (use build_graph instead)
-│   └── advanced_graph_processor.py # Community detection and summarization
+│   └── graph_processor.py          # Legacy processor (use build_graph instead)
 ├── 📂 retrievers/                   # RAG retrieval implementations
 │   ├── chroma_retriever.py         # ChromaDB vector similarity search
 │   ├── graph_rag_retriever.py      # Multi-hop graph traversal
@@ -61,14 +61,15 @@ RAGvsGraphRAG/
 │   ├── ragas_benchmark.py          # 🎯 Main evaluation CLI
 │   ├── visualizations.py           # Automated chart generation
 │   ├── benchmark.csv               # Default benchmark dataset
-│   ├── ragbench/                   # RAGBench dataset integration
-│   │   ├── simple_ingester.py      # Dataset processor
-│   │   ├── evaluator.py            # Q&A data preparation
-│   │   ├── results_formatter.py    # Human-readable reports
+│   ├── hotpotqa/                   # HotpotQA benchmark integration
+│   │   ├── benchmark_pipeline.py   # Main orchestrator
+│   │   ├── data_loader.py          # HotpotQA + Wikipedia downloader
+│   │   ├── wiki_ingester.py        # Neo4j graph ingestion
 │   │   ├── configs.py              # Preset configurations
-│   │   └── README.md               # RAGBench documentation
+│   │   └── README.md               # HotpotQA documentation
 │   └── README.md                   # Benchmarking guide
 ├── 📂 benchmark_outputs/           # Generated results and visualizations
+├── 📂 data/                        # Cached datasets (HotpotQA, Wikipedia)
 ├── 📂 tests/                       # Test and validation scripts
 ├── 📂 PDFs/                        # Source documents for processing
 ├── 📂 chroma_db/                   # ChromaDB vector store data
@@ -120,53 +121,40 @@ docker run --name neo4j-rag \
 python data_processors/process_data.py --pdfs
 ```
 
-#### **Option B: Use RAGBench Dataset**
+#### **Option B: Use HotpotQA Benchmark (Recommended)**
 ```bash
-# Quick test with nano preset (10 documents)
-python data_processors/process_data.py --ragbench --preset nano
-
-# Or larger dataset with domain hint
-python data_processors/process_data.py --ragbench --preset micro --domain financial
-
-# See all available presets
-python data_processors/process_data.py --list-presets
-
-# This creates:
-# - Neo4j graph with dynamically discovered entities and relationships
-# - ChromaDB vector store for similarity search  
-# - Entity resolution to merge duplicates using LLM evaluation
-# - Corpus-wide entity discovery with CLI approval and caching
+# The HotpotQA benchmark automatically downloads and ingests Wikipedia articles
+# See "Run Evaluation" section below
 ```
 
 ### 4. Run Evaluation
+
+#### **Quick Benchmark (Default CSV)**
 ```bash
-# Compare all RAG approaches (uses default benchmark.csv with 18 questions)
+# Compare all RAG approaches (uses default benchmark.csv)
 python benchmark/ragas_benchmark.py --all
 
-# Use RAGBench evaluation data (automatically created during processing)
-python benchmark/ragas_benchmark.py --all --jsonl benchmark/ragbench__nano_benchmark.jsonl
-
 # Selective testing
-python benchmark/ragas_benchmark.py --chroma --graphrag --text2cypher
+python benchmark/ragas_benchmark.py --chroma --graphrag --hybrid-cypher
 ```
 
-#### **📁 Benchmark File Selection Priority:**
-1. **`--jsonl file.jsonl`** → Uses specified JSONL file (highest priority)
-2. **`--csv file.csv`** → Uses specified CSV file  
-3. **No file specified** → Uses default `benchmark/benchmark.csv` (18 questions)
-
+#### **HotpotQA Benchmark**
 ```bash
-# Examples:
-python benchmark/ragas_benchmark.py --hybrid-cypher                    # Uses default CSV
-python benchmark/ragas_benchmark.py --hybrid-cypher --jsonl my.jsonl  # Uses custom JSONL
-```
+# Build database + test (first run - downloads Wikipedia, ingests, then tests)
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
 
-**⚠️ Note**: Approach flags (like `--hybrid-cypher`) determine **which retriever to test**, not which file to use.
+# Test only (subsequent runs - uses existing graph data)
+python -m benchmark.hotpotqa.benchmark_pipeline smoke
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers chroma graphrag hybrid_cypher
+
+# Full evaluation (~7400 questions, ~$100+)
+python -m benchmark.hotpotqa.benchmark_pipeline full --build-database
+```
 
 ### 5. View Results
 - **Neo4j Browser**: http://localhost:7474 (explore the knowledge graph)
 - **Charts**: `benchmark_outputs/` folder (performance comparisons)
-- **Detailed Reports**: HTML reports with individual Q&A analysis
+- **Detailed Reports**: CSV and JSON outputs with individual Q&A analysis
 
 ## ⚡ Global retriever performance benchmarking (before/after)
 
@@ -199,11 +187,11 @@ python -m benchmark.report_global_perf \
 - **Quality metrics** including diversity scores and compression ratios
 - **Interactive CLI approval** for discovered entity types
 
-### **🧪 RAGBench Integration** 
-- **Multiple dataset presets** from nano (10 docs) to full (60K docs)
-- **Rich metadata** with domain, dataset, and record IDs
-- **JSONL format** for flexible evaluation data
-- **Automated Q&A generation** for comprehensive evaluation
+### **🧪 HotpotQA Benchmark** 
+- **~7,400 multi-hop questions** requiring reasoning over multiple Wikipedia articles
+- **Automatic Wikipedia download** with intelligent caching
+- **Multiple presets** for quick testing to full evaluation
+- **Research-grade evaluation** matching academic benchmarks
 
 ### **🔍 7 Retrieval Approaches**
 - **ChromaDB RAG** - Fast vector similarity search
@@ -215,9 +203,9 @@ python -m benchmark.report_global_perf \
 - **DRIFT GraphRAG** - Dynamic reasoning with iterative refinement
 
 ### **📊 Comprehensive Evaluation**
-- **RAGAS metrics** - Context Recall, Faithfulness, Factual Correctness
+- **RAGAS metrics** - Response Relevancy, Factual Correctness, Semantic Similarity
 - **Automated visualizations** - Performance charts and heatmaps
-- **Detailed reports** - HTML, CSV, and JSON outputs
+- **Detailed reports** - CSV and JSON outputs
 - **Human-readable analysis** - Individual Q&A breakdowns
 
 ## 📚 Component Documentation
@@ -226,7 +214,7 @@ python -m benchmark.report_global_perf \
 - **[Build Graph](data_processors/build_graph/README.md)** - Technical deep-dive on enhanced graph processing
 - **[Retrievers](retrievers/README.md)** - Retrieval approaches and usage patterns
 - **[Benchmark](benchmark/README.md)** - Evaluation framework and RAGAS integration
-- **[RAGBench](benchmark/ragbench/README.md)** - RAGBench dataset integration details
+- **[HotpotQA](benchmark/hotpotqa/README.md)** - HotpotQA benchmark documentation
 - **[Embedding Dimensions](docs/EMBEDDING_DIMENSIONS.md)** - ⚠️ **IMPORTANT**: Guide for handling different embedding models and dimensions
 
 ## 🛠️ Requirements
@@ -258,20 +246,20 @@ Pure Neo4j vector similarity search using native vector operations without graph
 
 The benchmark evaluates all approaches using three key RAGAS metrics:
 
-#### 1. Context Recall (0.0-1.0)
-How well the retrieval system finds relevant information needed to answer the question.
+#### 1. Response Relevancy (0.0-1.0)
+How well the generated answer addresses and is relevant to the question asked.
 
-#### 2. Faithfulness (0.0-1.0)  
-How faithful the generated answer is to retrieved context without hallucination.
-
-#### 3. Factual Correctness (0.0-1.0)
+#### 2. Factual Correctness (0.0-1.0)
 How factually accurate the response is compared to ground truth reference answers.
+
+#### 3. Semantic Similarity (0.0-1.0)  
+How well the meaning of the response matches the expected answer.
 
 ### Overall Performance Calculation
 
 The **Average Score** for each approach is calculated as:
 ```
-Average Score = (Context Recall + Faithfulness + Factual Correctness) / 3
+Average Score = (Response Relevancy + Factual Correctness + Semantic Similarity) / 3
 ```
 
 ## 🧠 Dynamic Entity Discovery
@@ -338,15 +326,56 @@ python tests/test_ragas_setup.py    # All approaches validation
 ### Quick Start Checklist
 - [ ] Set up environment variables in `.env`
 - [ ] Run `pip install -r requirements.txt`
-- [ ] Add PDFs to `PDFs/` directory
-- [ ] Choose processing level: `python data_processors/graph_processor.py`
-- [ ] Validate setup: `python tests/test_ragas_setup.py`
-- [ ] Run benchmark: `python benchmark/ragas_benchmark.py --all`
+- [ ] Start Neo4j database
+- [ ] Run smoke test: `python -m benchmark.hotpotqa.benchmark_pipeline smoke`
+- [ ] View results in `benchmark_outputs/hotpotqa/`
 
 ## Cheatsheet
+
+```bash
+# Quick benchmark with default CSV
+python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --graphrag --limit 5
 ```
-python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --neo4j-vector --graphrag --advanced-graphrag  --limit 1 --jsonl benchmark/ragbench__nano_benchmark.jsonl
+
+#### **HotpotQA Benchmark**
+
+| Preset | Questions | Default Retrievers | Est. Cost | Est. Time |
+|--------|-----------|-------------------|-----------|-----------|
+| `mini` | 10 | chroma | ~$1 | 5 min |
+| `mini_smoke` | 25 | chroma, graphrag | ~$2 | 8 min |
+| `smoke` | 50 | chroma, graphrag | ~$5 | 15 min |
+| `dev` | 500 | chroma, graphrag, hybrid_cypher, advanced_graphrag | ~$20 | 60 min |
+| `full` | ~7400 | all | ~$100+ | 5 hours |
+
+**Test Only (default - uses existing graph data):**
+```bash
+# Tests retrievers against existing Neo4j data (no database changes)
+python -m benchmark.hotpotqa.benchmark_pipeline mini
+python -m benchmark.hotpotqa.benchmark_pipeline smoke
+python -m benchmark.hotpotqa.benchmark_pipeline mini --retrievers graphrag neo4j_vector
 ```
+
+**Build Database (downloads Wikipedia + clears DB + ingests + tests):**
+```bash
+# ⚠️ CLEARS Neo4j, ingests Wikipedia articles, then tests retrievers
+python -m benchmark.hotpotqa.benchmark_pipeline mini --build-database
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --retrievers graphrag neo4j_vector
 ```
-python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --neo4j-vector --graphrag --advanced-graphrag --text2cypher --limit 1
+
+**Recommended workflow:**
+```bash
+# 1. Build database once with desired preset size
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
+
+# 2. Run multiple tests against the same data (fast iteration)
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers graphrag
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers neo4j_vector hybrid_cypher
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers chroma graphrag neo4j_vector
+```
+
+**Utilities:**
+```bash
+# List all available presets
+python -m benchmark.hotpotqa.benchmark_pipeline --list-presets
 ```

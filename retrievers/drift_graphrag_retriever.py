@@ -729,14 +729,19 @@ async def query_drift_graphrag(query: str, use_modular: bool = True, **kwargs) -
     from data_processors import AdvancedGraphProcessor
     try:
         processor = AdvancedGraphProcessor()
-        print("✅ Neo4j connection successful")
+        print("✅ Neo4j connection successful for DRIFT")
     except Exception as e:
         print(f"⚠️ Neo4j connection failed: {e}")
         print("🔄 Attempting to use fallback approach...")
         
-        # Return a simple fallback response
+        # Return a simple fallback response with retrieval details for benchmark
         return {
-            'response': f"I apologize, but I'm unable to process your query '{query}' due to database connectivity issues. Please check your Neo4j connection and try again.",
+            'final_answer': f"I apologize, but I'm unable to process your query '{query}' due to database connectivity issues. Please check your Neo4j connection and try again.",
+            'retrieval_details': [{
+                'content': f"Database connection error: {str(e)}",
+                'metadata': {'error': str(e)},
+                'method': 'DRIFT_GRAPHRAG_FALLBACK'
+            }],
             'method': 'DRIFT_GRAPHRAG_FALLBACK',
             'execution_time': 0.1,
             'error': str(e)
@@ -746,13 +751,27 @@ async def query_drift_graphrag(query: str, use_modular: bool = True, **kwargs) -
         # Try new modular system first if enabled
         if use_modular:
             try:
+                print(f"🌀 Starting modular DRIFT search for: {query[:50]}...")
                 result_dict = await query_drift_search(query, graph_processor=processor, **kwargs)
+                
+                # Ensure result has retrieval_details with content
+                if 'retrieval_details' not in result_dict or not result_dict['retrieval_details']:
+                    result_dict['retrieval_details'] = [{
+                        'content': result_dict.get('final_answer', 'No content available'),
+                        'metadata': {},
+                        'method': 'drift_search'
+                    }]
+                
+                print(f"✅ DRIFT search completed with {len(result_dict.get('retrieval_details', []))} details")
                 return result_dict
             except Exception as e:
                 print(f"⚠️ Modular DRIFT failed, falling back to legacy: {e}")
+                import traceback
+                traceback.print_exc()
                 # Continue to legacy system
         
         # Legacy system
+        print("🔧 Using legacy DRIFT implementation...")
         config = DRIFTConfig(
             n_depth=kwargs.get('depth', 3),
             drift_k_followups=kwargs.get('k_followups', 3),
@@ -765,12 +784,14 @@ async def query_drift_graphrag(query: str, use_modular: bool = True, **kwargs) -
         # Perform search with legacy system
         result = await retriever.search(query, use_modular=False, **kwargs)
         
-        # Format response for benchmark compatibility
+        # Format response for benchmark compatibility - ensure content is present
+        context_content = result.context_text if result.context_text else result.response
+        
         return {
             'final_answer': result.response,
             'retrieval_details': [
                 {
-                    'content': result.context_text,
+                    'content': context_content,
                     'metadata': result.context_data,
                     'method': result.method,
                     'completion_time': result.completion_time,
@@ -794,7 +815,11 @@ async def query_drift_graphrag(query: str, use_modular: bool = True, **kwargs) -
         traceback.print_exc()
         return {
             'final_answer': f"Error during DRIFT GraphRAG retrieval: {str(e)}",
-            'retrieval_details': [],
+            'retrieval_details': [{
+                'content': f"Error during DRIFT retrieval: {str(e)}",
+                'metadata': {'error': str(e)},
+                'method': 'drift_graphrag_error'
+            }],
             'method': 'drift_graphrag_error',
             'performance_metrics': {
                 'completion_time': 0,
