@@ -143,6 +143,9 @@ python benchmark/ragas_benchmark.py --chroma --graphrag --hybrid-cypher
 # Build database + test (first run - downloads Wikipedia, ingests, then tests)
 python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
 
+# Build database WITHOUT community detection (faster, basic retrievers only)
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --skip-advanced
+
 # Test only (subsequent runs - uses existing graph data)
 python -m benchmark.hotpotqa.benchmark_pipeline smoke
 python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers chroma graphrag hybrid_cypher
@@ -339,13 +342,16 @@ python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --graphrag --limit 
 
 #### **HotpotQA Benchmark**
 
-| Preset | Questions | Default Retrievers | Est. Cost | Est. Time |
-|--------|-----------|-------------------|-----------|-----------|
-| `mini` | 10 | chroma | ~$1 | 5 min |
-| `mini_smoke` | 25 | chroma, graphrag | ~$2 | 8 min |
-| `smoke` | 50 | chroma, graphrag | ~$5 | 15 min |
-| `dev` | 500 | chroma, graphrag, hybrid_cypher, advanced_graphrag | ~$20 | 60 min |
-| `full` | ~7400 | all | ~$100+ | 5 hours |
+| Preset | Questions | Articles | Default Retrievers | Needs Communities? |
+|--------|-----------|----------|-------------------|-------------------|
+| `micro` | 1 | ~2 | chroma | No |
+| `mini` | 10 | ~20 | chroma | No |
+| `mini_smoke` | 25 | ~50 | chroma, graphrag | No |
+| `smoke` | 50 | ~100 | chroma, graphrag | No |
+| `dev` | 500 | ~1000 | chroma, graphrag, hybrid_cypher, advanced_graphrag | Yes* |
+| `full` | ~7400 | ~10000 | all | Yes* |
+
+*`advanced_graphrag` and `drift_graphrag` require community detection. Use `--skip-advanced` if you don't need these. 
 
 **Test Only (default - uses existing graph data):**
 ```bash
@@ -357,11 +363,24 @@ python -m benchmark.hotpotqa.benchmark_pipeline mini --retrievers graphrag neo4j
 
 **Build Database (downloads Wikipedia + clears DB + ingests + tests):**
 ```bash
-# ⚠️ CLEARS Neo4j, ingests Wikipedia articles, then tests retrievers
+# !!! CLEARS Neo4j, ingests Wikipedia articles, then tests retrievers
+# Includes community detection + element summarization (for advanced_graphrag, drift_graphrag)
 python -m benchmark.hotpotqa.benchmark_pipeline mini --build-database
 python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
 python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --retrievers graphrag neo4j_vector
 ```
+
+**Build Database WITHOUT Advanced Processing (faster):**
+```bash
+# Skip community detection + summarization - faster build, basic retrievers only
+python -m benchmark.hotpotqa.benchmark_pipeline mini --build-database --skip-advanced
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --skip-advanced
+```
+
+| Flag | Effect | Use When |
+|------|--------|----------|
+| `--build-database` | Full build with communities | Need `advanced_graphrag` or `drift_graphrag` |
+| `--build-database --skip-advanced` | Basic build, no communities | Only need `graphrag`, `neo4j_vector`, `hybrid_cypher` |
 
 **Recommended workflow:**
 ```bash

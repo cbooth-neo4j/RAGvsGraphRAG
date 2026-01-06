@@ -26,6 +26,7 @@ def run_hotpotqa_benchmark(
     preset: str = "smoke",
     retrievers: Optional[List[str]] = None,
     build_database: bool = False,
+    run_advanced: bool = True,
     output_dir: str = "benchmark_outputs/hotpotqa",
     cache_dir: str = "data/hotpotqa"
 ) -> Dict[str, Any]:
@@ -43,6 +44,7 @@ def run_hotpotqa_benchmark(
         preset: Benchmark preset (smoke, dev, full, mini)
         retrievers: List of retrievers to test (overrides preset)
         build_database: If True, clear Neo4j and ingest Wikipedia articles
+        run_advanced: If True, run advanced processing (community detection + summarization)
         output_dir: Directory for benchmark outputs
         cache_dir: Directory for caching downloaded data
         
@@ -112,6 +114,30 @@ def run_hotpotqa_benchmark(
     if config["question_limit"] and len(questions) > config["question_limit"]:
         questions = questions[:config["question_limit"]]
     
+    # Always ensure articles match the questions being used
+    # Extract titles referenced by current questions (supporting facts + context/distractors)
+    referenced_titles = set()
+    supporting_titles = set()  # Just the gold supporting facts
+    for q in questions:
+        # Extract from context (includes distractors)
+        for ctx in q.get("context", []):
+            if isinstance(ctx, (list, tuple)) and len(ctx) >= 1:
+                referenced_titles.add(ctx[0])
+        # Extract from supporting facts (gold articles)
+        for sf in q.get("supporting_facts", []):
+            if isinstance(sf, (list, tuple)) and len(sf) >= 1:
+                referenced_titles.add(sf[0])
+                supporting_titles.add(sf[0])
+    
+    # Filter articles to only include referenced ones
+    original_article_count = len(articles)
+    articles = [a for a in articles if a.get("title") in referenced_titles]
+    
+    if len(articles) != original_article_count:
+        print(f"[FILTER] Filtered articles from {original_article_count} to {len(articles)} (matching {len(questions)} questions)")
+    
+    print(f"[INFO] Article breakdown: {len(supporting_titles)} gold supporting + {len(referenced_titles) - len(supporting_titles)} distractors")
+    
     results["phases"]["data_preparation"] = {
         "questions_loaded": len(questions),
         "articles_loaded": len(articles),
@@ -132,12 +158,16 @@ def run_hotpotqa_benchmark(
     if build_database:
         print("[BUILD] Building database from Wikipedia articles...")
         print("        ⚠️  This will CLEAR the existing Neo4j database!")
+        if run_advanced:
+            print("        📊 Advanced processing enabled (community detection + summarization)")
+        else:
+            print("        ⏭️  Advanced processing SKIPPED (use without --skip-advanced to enable)")
         ingester = WikiCorpusIngester()
         try:
             ingestion_result = ingester.ingest_corpus(
                 articles=articles,
                 clear_db=True,
-                run_advanced_processing=True,
+                run_advanced_processing=run_advanced,
                 domain_hint="qa"
             )
             results["phases"]["ingestion"] = {
@@ -281,6 +311,9 @@ def run_hotpotqa_benchmark(
         winner = max(averages, key=averages.get)
         print(f"\n   Best Overall: {winner} ({averages[winner]:.4f})")
     
+    # Flush stdout to prevent duplicate output on Windows
+    sys.stdout.flush()
+    
     # Save results
     save_results_selective(
         datasets=datasets,
@@ -339,11 +372,15 @@ Examples:
   python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
   python -m benchmark.hotpotqa.benchmark_pipeline dev --build-database --retrievers chroma graphrag
 
+  # Build database WITHOUT community detection (faster, basic retrievers only)
+  python -m benchmark.hotpotqa.benchmark_pipeline mini --build-database --skip-advanced
+
   # Full evaluation (all ~7400 questions)
   python -m benchmark.hotpotqa.benchmark_pipeline full --build-database
 
 Note: Questions are from HotpotQA dataset. For best results, use --build-database 
       first to ingest the corresponding Wikipedia articles, then run tests without it.
+      Use --skip-advanced to skip community detection if you only need basic retrievers.
         """
     )
     
@@ -351,7 +388,7 @@ Note: Questions are from HotpotQA dataset. For best results, use --build-databas
         "preset",
         nargs="?",
         default="smoke",
-        choices=["mini_smoke", "smoke", "dev", "full", "mini"],
+        choices=["micro", "mini", "mini_smoke", "smoke", "dev", "full"],
         help="Benchmark preset (default: smoke)"
     )
     
@@ -365,6 +402,12 @@ Note: Questions are from HotpotQA dataset. For best results, use --build-databas
         "--build-database",
         action="store_true",
         help="Clear Neo4j and ingest Wikipedia articles before testing (default: test only)"
+    )
+    
+    parser.add_argument(
+        "--skip-advanced",
+        action="store_true",
+        help="Skip advanced processing (community detection + summarization) when building database"
     )
     
     parser.add_argument(
@@ -397,6 +440,7 @@ Note: Questions are from HotpotQA dataset. For best results, use --build-databas
         preset=args.preset,
         retrievers=args.retrievers,
         build_database=args.build_database,
+        run_advanced=not args.skip_advanced,
         output_dir=args.output_dir,
         cache_dir=args.cache_dir
     )

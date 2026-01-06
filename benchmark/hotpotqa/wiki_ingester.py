@@ -130,7 +130,8 @@ class WikiCorpusIngester:
                 prompt_for_advanced=run_advanced_processing,
                 auto_advanced=run_advanced_processing,
                 mode='fresh' if clear_db else 'add',
-                doc_prefix='wiki'  # Use 'wiki' prefix for Wikipedia articles
+                doc_prefix='wiki',  # Use 'wiki' prefix for Wikipedia articles
+                dataset_name='HotpotQA Wikipedia'  # Display name for summary
             )
             
             # Add corpus-specific stats

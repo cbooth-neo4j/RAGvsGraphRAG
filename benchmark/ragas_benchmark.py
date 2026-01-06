@@ -320,10 +320,23 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
         # These don't penalize GraphRAG for using synthesized context vs raw chunks
         metric_timeout = int(os.getenv('RAGAS_METRIC_TIMEOUT', '300'))  # 5 minutes per metric
         
+        # Configure ResponseRelevancy with explicit LLM and embeddings
+        # This helps avoid the 0-score issue where questions aren't generated properly
+        response_relevancy = ResponseRelevancy()
+        response_relevancy.llm = evaluator_llm
+        response_relevancy.embeddings = evaluator_embeddings
+        
+        # Configure FactualCorrectness and SemanticSimilarity
+        factual_correctness = FactualCorrectness()
+        factual_correctness.llm = evaluator_llm
+        
+        semantic_similarity = SemanticSimilarity()
+        semantic_similarity.embeddings = evaluator_embeddings
+        
         metrics = [
-            ResponseRelevancy(),      # Does the response address the question?
-            FactualCorrectness(),     # Are the facts in the response correct?
-            SemanticSimilarity()      # Does the response meaning match ground truth?
+            response_relevancy,       # Does the response address the question?
+            factual_correctness,      # Are the facts in the response correct?
+            semantic_similarity       # Does the response meaning match ground truth?
         ]
         
         # Configure timeout for each metric if supported
@@ -463,7 +476,15 @@ def evaluate_with_ragas_simple(dataset: List[Dict[str, Any]], approach_name: str
                 for col in numeric_cols:
                     successful_samples = df[col].count()  # Non-NaN count
                     success_rate = successful_samples / total_samples
-                    print(f"   {col}: {successful_samples}/{total_samples} samples ({success_rate:.1%} success)")
+                    col_values = df[col].dropna().tolist()
+                    # Show some debug info about the values
+                    if col_values:
+                        min_val, max_val = min(col_values), max(col_values)
+                        nonzero_count = sum(1 for v in col_values if v > 0)
+                        print(f"   {col}: {successful_samples}/{total_samples} samples ({success_rate:.1%} success), "
+                              f"range=[{min_val:.4f}, {max_val:.4f}], non-zero={nonzero_count}")
+                    else:
+                        print(f"   {col}: {successful_samples}/{total_samples} samples ({success_rate:.1%} success), ALL NaN")
                 
                 scores = df[numeric_cols].mean().to_dict()
                 print(f"   Numeric scores: {scores}")

@@ -346,7 +346,8 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                                  prompt_for_advanced: bool = True,
                                  auto_advanced: bool = False,
                                  mode: str = 'fresh',
-                                 doc_prefix: str = 'ragbench') -> Dict[str, Any]:
+                                 doc_prefix: str = 'ragbench',
+                                 dataset_name: str = 'RAGBench') -> Dict[str, Any]:
         """
         Process RAGBench documents with enhanced entity discovery.
         
@@ -358,6 +359,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             prompt_for_advanced: Show interactive prompt for advanced processing (default True for CLI)
             auto_advanced: Auto-run advanced processing without prompt (backward compatibility)
             mode: 'fresh' (default) or 'add' (skip doc processing, just run advanced)
+            dataset_name: Name of the dataset for display purposes (default 'RAGBench')
             
         Returns:
             Processing statistics
@@ -451,7 +453,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             'results': results
         }
         
-        print(f"\n[SUMMARY] RAGBench Processing Summary:")
+        print(f"\n[SUMMARY] {dataset_name} Processing Summary:")
         print(f"   Documents: {summary['successful_documents']}/{summary['total_documents']} successful")
         print(f"   Chunks: {summary['total_chunks_created']:,}")
         print(f"   Entities: {summary['total_entities_created']:,}")

@@ -8,6 +8,14 @@ from quick smoke tests to full evaluation runs.
 from typing import Dict, List, Optional, Any
 
 BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
+    "micro": {
+        "description": "Minimal ETL test (1 question, ~2 articles)",
+        "question_limit": 1,
+        "retrievers": ["chroma"],
+        "estimated_articles": 2,
+        "estimated_cost": "<$0.10",
+        "estimated_time_minutes": 1
+    },
     "mini_smoke": {
         "description": "Ultra-quick validation (25 questions, ~50 articles)",
         "question_limit": 25,
@@ -44,7 +52,7 @@ BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
         "description": "Minimal test (10 questions)",
         "question_limit": 10,
         "retrievers": ["chroma"],
-        "estimated_articles": 20,
+        "estimated_articles": 100,  # ~10 articles per question (2 gold + 8 distractors)
         "estimated_cost": "$1",
         "estimated_time_minutes": 5
     }
