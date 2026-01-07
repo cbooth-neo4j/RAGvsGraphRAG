@@ -161,7 +161,7 @@ class HybridCypherRAGRetriever:
         
         return sanitized
 
-    def search(self, query: str, k: int = 3) -> Dict[str, Any]:
+    def search(self, query: str, k: int = 3, answer_style: str = "ragas") -> Dict[str, Any]:
         """
         Perform Local Entity hybrid search with graph expansion.
 
@@ -173,6 +173,8 @@ class HybridCypherRAGRetriever:
         Args:
             query: The search query (entity-focused queries work best)
             k: Number of entity results to retrieve
+            answer_style: Response format - "hotpotqa" for short exact answers (EM/F1 benchmarks),
+                         "ragas" for verbose real-world answers (default)
 
         Returns:
             Dictionary with search results and metadata including:
@@ -334,7 +336,27 @@ class HybridCypherRAGRetriever:
                 context = "\n\n".join(context_parts)
 
                 # Generate LLM response with Local Entity hybrid context
-                prompt = f"""You are answering a question using information retrieved through Local Entity GraphRAG, which provides entity-centric context including related chunks, communities, and relationships.
+                # Use different prompts based on answer_style for benchmark compatibility
+                if answer_style == "hotpotqa":
+                    # HotpotQA benchmark requires short, exact answers for EM/F1 scoring
+                    prompt = f"""Answer the question using ONLY the retrieved context below.
+
+Question: {query}
+
+Retrieved Context:
+{context}
+
+CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
+- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
+- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
+- For comparison questions asking "same" or "both": Answer "yes" or "no"
+- NO explanations, NO reasoning, NO sentences - just the bare answer
+- If you cannot determine the answer from context, respond with "unknown"
+
+Answer:"""
+                else:
+                    # RAGAS/real-world mode: verbose, comprehensive answers
+                    prompt = f"""You are answering a question using information retrieved through Local Entity GraphRAG, which provides entity-centric context including related chunks, communities, and relationships.
 
 Question: {query}
 
@@ -391,13 +413,15 @@ def create_hybrid_cypher_retriever(model_config: Optional[Any] = None) -> Hybrid
 
 
 # Main interface function for integration with benchmark system
-def query_hybrid_cypher_rag(query: str, k: int = 3, **kwargs) -> Dict[str, Any]:
+def query_hybrid_cypher_rag(query: str, k: int = 3, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
     """
     Hybrid Cypher GraphRAG retrieval with LLM response generation
 
     Args:
         query: The search query
         k: Number of chunks to retrieve
+        answer_style: Response format - "hotpotqa" for short exact answers (EM/F1 benchmarks),
+                     "ragas" for verbose real-world answers (default)
         **kwargs: Additional configuration options (for compatibility)
 
     Returns:
@@ -405,7 +429,7 @@ def query_hybrid_cypher_rag(query: str, k: int = 3, **kwargs) -> Dict[str, Any]:
     """
     try:
         retriever = create_hybrid_cypher_retriever()
-        result = retriever.search(query, k)
+        result = retriever.search(query, k, answer_style=answer_style)
 
         # Format response for benchmark compatibility
         return {

@@ -322,6 +322,7 @@ class LLMFactory:
         is_thinking = ModelConfig.is_thinking_model(effective_model)
         if is_thinking:
             logger.info(f"Using thinking model {effective_model.value} - temperature parameter will be omitted")
+            logger.info(f"Reasoning effort: {config.thinking_model_reasoning_effort}")
         
         # Build model params - exclude temperature for thinking models
         model_params = {}
@@ -335,6 +336,12 @@ class LLMFactory:
         
         if effective_provider == ModelProvider.OPENAI:
             os.environ.pop('SSL_CERT_FILE', None)
+            # Add reasoning effort for thinking models
+            if is_thinking:
+                model_params['model_kwargs'] = model_params.get('model_kwargs', {})
+                model_params['model_kwargs']['reasoning'] = {
+                    'effort': config.thinking_model_reasoning_effort
+                }
             return ChatOpenAI(
                 model=effective_model.value,
                 openai_api_key=config.openai_api_key,

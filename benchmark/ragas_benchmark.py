@@ -170,9 +170,15 @@ def load_benchmark_data_jsonl(jsonl_path: str) -> List[Dict[str, str]]:
     print(f"Loaded {len(benchmark_data)} benchmark questions from JSONL")
     return benchmark_data
 
-def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approach: str = "chroma") -> List[Dict[str, Any]]:
+def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approach: str = "chroma", answer_style: str = "ragas") -> List[Dict[str, Any]]:
     """
     Collect evaluation data following RAGAS documentation pattern
+    
+    Args:
+        benchmark_data: List of question/ground_truth dictionaries
+        approach: Retriever to use (chroma, graphrag, hybrid-cypher, etc.)
+        answer_style: Answer format style - "hotpotqa" for short exact answers,
+                     "ragas" for verbose real-world answers (default)
     """
     print(f"\nCollecting evaluation data for {approach.upper()} approach...")
     
@@ -186,24 +192,25 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
         
         try:
             # Query the appropriate RAG system using new retriever functions
+            # Pass answer_style to retrievers that support it for benchmark-appropriate responses
             if approach == "chroma" and CHROMA_AVAILABLE:
-                result = query_chroma_rag(query, k=1)
+                result = query_chroma_rag(query, k=1, answer_style=answer_style)
             elif approach == "graphrag" and GRAPHRAG_AVAILABLE:
-                result = query_graphrag(query, k=5)
+                result = query_graphrag(query, k=5, answer_style=answer_style)
             elif approach == "text2cypher" and TEXT2CYPHER_AVAILABLE:
-                result = query_text2cypher_rag(query)
+                result = query_text2cypher_rag(query, answer_style=answer_style)
             elif approach == "advanced-graphrag" and ADVANCED_GRAPHRAG_AVAILABLE:
-                result = query_advanced_graphrag(query, mode="hybrid", k=5)
+                result = query_advanced_graphrag(query, mode="hybrid", k=5, answer_style=answer_style)
             elif approach == "drift-graphrag" and DRIFT_GRAPHRAG_AVAILABLE:
-                result = query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True)
+                result = query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True, answer_style=answer_style)
             elif approach == "neo4j-vector" and NEO4J_VECTOR_AVAILABLE:
-                result = query_neo4j_vector_rag(query, k=5)
+                result = query_neo4j_vector_rag(query, k=5, answer_style=answer_style)
             elif approach == "hybrid-cypher" and HYBRID_CYPHER_AVAILABLE:
                 # Use the main hybrid cypher function with reduced k for benchmark stability
-                result = query_hybrid_cypher_rag(query, k=5)
+                result = query_hybrid_cypher_rag(query, k=5, answer_style=answer_style)
             elif approach == "agentic-text2cypher" and AGENTIC_TEXT2CYPHER_AVAILABLE:
-                # Deep Agent-powered adaptive graph exploration
-                result = query_agentic_text2cypher_rag(query)
+                # Deep Agent-powered adaptive graph exploration (has its own strict prompting)
+                result = query_agentic_text2cypher_rag(query, answer_style=answer_style)
             else:
                 # Handle unavailable retrievers or unknown approaches
                 if approach == "chroma" and not CHROMA_AVAILABLE:

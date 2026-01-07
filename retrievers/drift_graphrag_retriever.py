@@ -712,18 +712,21 @@ Research Results:
         return "\n\n".join(formatted_responses)
 
 # Main integration function for benchmark
-async def query_drift_graphrag(query: str, use_modular: bool = True, **kwargs) -> Dict[str, Any]:
+async def query_drift_graphrag(query: str, use_modular: bool = True, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
     """
     DRIFT GraphRAG retrieval for benchmark integration
     
     Args:
         query: The search query
         use_modular: Whether to use new modular DRIFT system (default: True)
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         **kwargs: Additional configuration options
     
     Returns:
         Dictionary with response and retrieval details
     """
+    # Pass answer_style through kwargs for downstream components
+    kwargs['answer_style'] = answer_style
     
     # Initialize graph processor with error handling
     from data_processors import AdvancedGraphProcessor
@@ -840,14 +843,20 @@ def create_drift_retriever() -> DriftGraphRAGRetriever:
     config = DRIFTConfig()
     return DriftGraphRAGRetriever(processor, config)
 
-def query_drift_graphrag_sync(query: str, **kwargs) -> Dict[str, Any]:
-    """Synchronous wrapper for query_drift_graphrag"""
+def query_drift_graphrag_sync(query: str, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
+    """Synchronous wrapper for query_drift_graphrag
+    
+    Args:
+        query: The search query
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        **kwargs: Additional configuration options
+    """
     import asyncio
     import sys
     
     def run_async():
         """Run the async function in a clean environment"""
-        return asyncio.run(query_drift_graphrag(query, **kwargs))
+        return asyncio.run(query_drift_graphrag(query, answer_style=answer_style, **kwargs))
     
     # Always use asyncio.run in a clean way
     try:

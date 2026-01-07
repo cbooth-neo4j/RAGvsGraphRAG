@@ -65,18 +65,6 @@ python -m retrievers.text2cypher_retriever
 - **Best for**: Complex analytical questions requiring reasoning
 - **Speed**: Slowest (1000-5000ms)
 
-## 📊 Performance Characteristics
-
-| Retriever | Speed | Accuracy | Complexity | Best Use Case |
-|-----------|-------|----------|------------|---------------|
-| ChromaDB | ⚡⚡⚡ | 📊📊 | 🔧 | Semantic similarity |
-| Neo4j Vector | ⚡⚡ | 📊📊📊 | 🔧🔧 | Graph + vectors |
-| GraphRAG | ⚡⚡ | 📊📊📊 | 🔧🔧🔧 | Multi-entity questions |
-| Advanced GraphRAG | ⚡ | 📊📊📊📊 | 🔧🔧🔧🔧 | Complex analysis |
-| Text2Cypher | ⚡⚡ | 📊📊📊📊 | 🔧🔧 | Structured queries |
-| Hybrid Cypher | ⚡⚡ | 📊📊📊📊 | 🔧🔧🔧 | Balanced approach |
-| DRIFT | ⚡ | 📊📊📊📊📊 | 🔧🔧🔧🔧🔧 | Complex reasoning |
-
 ## 🔧 Usage Patterns
 
 ### **Development & Testing**
@@ -87,12 +75,6 @@ from retrievers.graph_rag_retriever import GraphRAGRetriever
 retriever = GraphRAGRetriever()
 result = retriever.retrieve("What companies are mentioned?")
 print(result)
-```
-
-### **Benchmark Integration**
-```bash
-# Retrievers are automatically tested by benchmark system
-python benchmark/ragas_benchmark.py --all
 ```
 
 ### **Custom Integration**
@@ -121,55 +103,6 @@ pip install neo4j chromadb langchain-openai
 pip install scikit-learn  # For enhanced processing
 ```
 
-## 🎯 Choosing the Right Retriever
-
-### **For Simple Semantic Questions**
-→ Use **ChromaDB RAG**
-- "What is machine learning?"
-- "Find documents about AI"
-
-### **For Entity-Specific Questions**  
-→ Use **Text2Cypher** or **Neo4j Vector**
-- "Who works at Acme Corp?"
-- "What projects involve John Smith?"
-
-### **For Complex Multi-Entity Questions**
-→ Use **GraphRAG** or **Advanced GraphRAG**
-- "How are companies A and B related through their employees?"
-- "What's the relationship between project X and technology Y?"
-
-### **For Analytical Questions**
-→ Use **Advanced GraphRAG** or **DRIFT**
-- "Analyze the competitive landscape in this industry"
-- "What are the key trends across these documents?"
-
-### **For Balanced Performance**
-→ Use **Hybrid Cypher**
-- Good performance across various question types
-- Combines benefits of vector and graph approaches
-
-## 🔄 Integration Workflow
-
-### **1. Data Processing**
-```bash
-# Process your data first
-python data_processors/process_data.py --pdfs
-# or
-python data_processors/process_data.py --ragbench --preset nano
-```
-
-### **2. Test Retrievers**
-```bash
-# Test individual retrievers
-python -m retrievers.chroma_retriever
-python -m retrievers.graph_rag_retriever
-```
-
-### **3. Benchmark Evaluation**
-```bash
-# Compare all retrievers
-python benchmark/ragas_benchmark.py --all
-```
 
 ### **4. Production Use**
 ```python

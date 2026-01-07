@@ -83,17 +83,21 @@ class Neo4jVectorRetriever:
             llm=self.llm_model
         )
     
-    def search(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+    def search(self, query: str, top_k: int = 5, answer_style: str = "ragas") -> Dict[str, Any]:
         """
         Perform vector search and generate response
         
         Args:
             query: Search query
             top_k: Number of top results to retrieve
+            answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+                         Note: This retriever uses GraphRAG's built-in pipeline which handles prompts internally.
+                         The answer_style is accepted for API consistency but may not affect output format.
             
         Returns:
             Dictionary with response and retrieval details
         """
+        # Note: answer_style accepted for API consistency but GraphRAG pipeline handles prompts internally
         try:
             print(f"🔍 Executing Neo4j Vector search for: {query}")
             
@@ -197,13 +201,15 @@ def create_neo4j_vector_retriever(driver=None, index_name: str = INDEX_NAME, **k
     )
 
 
-def query_neo4j_vector_rag(query: str, k: int = 5, **kwargs) -> Dict[str, Any]:
+def query_neo4j_vector_rag(query: str, k: int = 5, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
     """
     Main interface function for Neo4j Vector RAG queries
     
     Args:
         query: The search query
         k: Number of top results to retrieve
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+                     Note: Uses GraphRAG's built-in pipeline, answer_style accepted for API consistency.
         **kwargs: Additional configuration options
         
     Returns:

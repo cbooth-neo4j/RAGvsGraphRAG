@@ -96,8 +96,15 @@ class GraphRAGRetriever:
         except Exception as e:
             logger.warning(f"Could not validate dimensions: {e}")
     
-    def search(self, query: str, k: int = 3) -> Dict[str, Any]:
-        """Neo4j GraphRAG query with LLM response generation"""
+    def search(self, query: str, k: int = 3, answer_style: str = "ragas") -> Dict[str, Any]:
+        """Neo4j GraphRAG query with LLM response generation
+        
+        Args:
+            query: The search query
+            k: Number of chunks to retrieve
+            answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        """
+        self._answer_style = answer_style
         
         with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password), database=self.neo4j_db) as driver:
             print(f"🔍 Executing GraphRAG query for: {query}")
@@ -311,8 +318,27 @@ class GraphRAGRetriever:
                 
                 context = "\n\n".join(context_parts)
                 
-                # Generate LLM response with GraphRAG context
-                prompt = f"""Based on the following retrieved documents, provide a factual answer to the question.
+                # Generate LLM response with GraphRAG context - use answer_style for prompt
+                if getattr(self, '_answer_style', 'ragas') == "hotpotqa":
+                    # HotpotQA benchmark requires short, exact answers
+                    prompt = f"""Answer the question using ONLY the retrieved documents below.
+
+Question: {query}
+
+Retrieved Documents:
+{context}
+
+CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
+- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
+- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
+- For comparison questions asking "same" or "both": Answer "yes" or "no"
+- NO explanations, NO reasoning, NO sentences - just the bare answer
+- If you cannot determine the answer from the documents, respond with "unknown"
+
+Answer:"""
+                else:
+                    # RAGAS/real-world mode: verbose, comprehensive answers
+                    prompt = f"""Based on the following retrieved documents, provide a factual answer to the question.
 
 Question: {query}
 
@@ -361,13 +387,13 @@ def create_graphrag_retriever() -> GraphRAGRetriever:
 
 
 # Main interface function for integration with benchmark system
-def query_graphrag(query: str, k: int = 3, **kwargs) -> Dict[str, Any]:
-    """
-            GraphRAG retrieval with LLM response generation
+def query_graphrag(query: str, k: int = 3, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
+    """GraphRAG retrieval with LLM response generation
     
     Args:
         query: The search query
         k: Number of chunks to retrieve
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         **kwargs: Additional configuration options (for compatibility)
     
     Returns:
@@ -376,7 +402,7 @@ def query_graphrag(query: str, k: int = 3, **kwargs) -> Dict[str, Any]:
     logger.debug(f'In query_graphrag with top-k: {k} & query: {query}')
     try:
         retriever = create_graphrag_retriever()
-        result = retriever.search(query, k)
+        result = retriever.search(query, k, answer_style=answer_style)
         
         # Format response for benchmark compatibility
         return {

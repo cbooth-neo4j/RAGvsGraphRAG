@@ -2687,7 +2687,7 @@ if __name__ == "__main__":
 # ===== COMPATIBILITY LAYER =====
 # These functions maintain compatibility with existing benchmark and drift GraphRAG systems
 
-async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, **kwargs) -> Dict[str, Any]:
+async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
     """
     Compatibility function that matches the old advanced_graphrag interface.
     Now powered by advanced GraphRAG implementation with production-ready patterns.
@@ -2696,11 +2696,14 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
         query: The search query
         mode: "local", "global", or "hybrid" 
         k: Number of results/entities to consider
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         **kwargs: Additional configuration options
     
     Returns:
         Dictionary with response and retrieval details
     """
+    # Pass answer_style through kwargs for downstream components
+    kwargs['answer_style'] = answer_style
     logger.info(f"In advanced GraphRAG wit mode = {mode}")
     if mode == "local":
         return await query_advanced_graphrag_local(query, k=k, **kwargs)
@@ -2832,14 +2835,20 @@ def create_advanced_graphrag_retriever(
     else:
         raise ValueError(f"Unknown mode: {mode}. Must be 'local', 'global', or 'hybrid'")
 
-def query_advanced_graphrag_sync(query: str, **kwargs) -> Dict[str, Any]:
-    """Synchronous wrapper for query_advanced_graphrag"""
+def query_advanced_graphrag_sync(query: str, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
+    """Synchronous wrapper for query_advanced_graphrag
+    
+    Args:
+        query: The search query
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        **kwargs: Additional configuration options
+    """
     import asyncio
     import sys
     
     def run_async():
         """Run the async function in a clean environment"""
-        return asyncio.run(query_advanced_graphrag(query, **kwargs))
+        return asyncio.run(query_advanced_graphrag(query, answer_style=answer_style, **kwargs))
     
     # Always use asyncio.run in a clean way
     try:

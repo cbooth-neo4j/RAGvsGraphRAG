@@ -85,6 +85,9 @@ class ModelConfig:
     agentic_text2cypher_model: Optional[LLMModel] = None
     agentic_text2cypher_max_iterations: int = 10  # Agent can iterate more
     
+    # Thinking model settings (GPT-5.2, o3, etc.)
+    thinking_model_reasoning_effort: str = "high"  # none, low, medium, high
+    
     # Ollama specific settings
     ollama_base_url: str = "http://localhost:11434"
     
@@ -170,6 +173,15 @@ class ModelConfig:
             self.agentic_text2cypher_model = None
             
         self.agentic_text2cypher_max_iterations = int(os.getenv('AGENTIC_TEXT2CYPHER_MAX_ITERATIONS', '10'))
+        
+        # Load thinking model reasoning effort
+        reasoning_effort = os.getenv('THINKING_MODEL_REASONING_EFFORT', 'high').lower()
+        valid_efforts = {'none', 'low', 'medium', 'high'}
+        if reasoning_effort not in valid_efforts:
+            logger.warning(f"Invalid THINKING_MODEL_REASONING_EFFORT '{reasoning_effort}', using 'high'")
+            reasoning_effort = 'high'
+        self.thinking_model_reasoning_effort = reasoning_effort
+        logger.debug(f"Thinking model reasoning effort: {self.thinking_model_reasoning_effort}")
     
     def _get_llm_model_enum(self, model_name: str) -> LLMModel:
         """Convert model name string to LLMModel enum"""

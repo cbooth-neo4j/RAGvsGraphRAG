@@ -221,13 +221,20 @@ def run_hotpotqa_benchmark(
         })
     
     # Collect evaluation data for each retriever
+    # HotpotQA uses short factoid answers - use "hotpotqa" answer style for EM/F1 metrics
+    # RAGAS can handle verbose answers - use "ragas" answer style when include_ragas is True
+    answer_style = "ragas" if include_ragas and not include_ragas else "hotpotqa"
+    # Actually: HotpotQA benchmark always needs short answers for EM/F1, even if RAGAS is also enabled
+    answer_style = "hotpotqa"
+    
     datasets = {}
     for retriever in config["retrievers"]:
         print(f"\n[EVAL] Collecting data for {retriever}...")
         try:
             datasets[retriever] = collect_evaluation_data_simple(
                 benchmark_data, 
-                approach=retriever
+                approach=retriever,
+                answer_style=answer_style
             )
         except Exception as e:
             print(f"[ERROR] Failed to evaluate {retriever}: {e}")

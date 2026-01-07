@@ -866,8 +866,14 @@ class Text2CypherRAGRetriever:
         logger.warning(f"Refinement completed after {len(attempts)} iterations without full validation")
         return current_cypher, attempts, False
     
-    def search(self, query: str) -> Dict[str, Any]:
-        """Neo4j Text2Cypher query with natural language to Cypher conversion and iterative refinement"""
+    def search(self, query: str, answer_style: str = "ragas") -> Dict[str, Any]:
+        """Neo4j Text2Cypher query with natural language to Cypher conversion and iterative refinement
+        
+        Args:
+            query: The natural language question
+            answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        """
+        self._answer_style = answer_style
         
         with neo4j.GraphDatabase.driver(self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password), database=self.neo4j_db) as driver:
             logger.info(f"Executing Text2Cypher query for: {query}")
@@ -970,7 +976,27 @@ class Text2CypherRAGRetriever:
                 context = "\n\n".join(context_parts)
                 logger.debug(f"Combined context length: {len(context)} characters")
                 
-                prompt = f"""Based on the following query results from a knowledge graph database, provide a comprehensive answer to the question.
+                # Use different prompts based on answer_style
+                if getattr(self, '_answer_style', 'ragas') == "hotpotqa":
+                    # HotpotQA benchmark requires short, exact answers
+                    prompt = f"""Answer the question using ONLY the query results below.
+
+Question: {query}
+
+Query Results:
+{context}
+
+CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
+- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
+- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
+- For comparison questions asking "same" or "both": Answer "yes" or "no"
+- NO explanations, NO reasoning, NO sentences - just the bare answer
+- If you cannot determine the answer from the results, respond with "unknown"
+
+Answer:"""
+                else:
+                    # RAGAS/real-world mode: verbose, comprehensive answers
+                    prompt = f"""Based on the following query results from a knowledge graph database, provide a comprehensive answer to the question.
 
 Question: {query}
 
@@ -1028,11 +1054,17 @@ def create_text2cypher_retriever() -> Text2CypherRAGRetriever:
 
 
 # Main interface function for integration with benchmark system
-def query_text2cypher_rag(query: str, **kwargs) -> Dict[str, Any]:
-    """Text2Cypher RAG retrieval with natural language to Cypher conversion"""
+def query_text2cypher_rag(query: str, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
+    """Text2Cypher RAG retrieval with natural language to Cypher conversion
+    
+    Args:
+        query: The search query
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        **kwargs: Additional configuration options
+    """
     try:
         retriever = create_text2cypher_retriever()
-        result = retriever.search(query)
+        result = retriever.search(query, answer_style=answer_style)
         
         return {
             'final_answer': result['final_answer'],

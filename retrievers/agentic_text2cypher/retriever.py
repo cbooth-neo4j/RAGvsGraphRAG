@@ -83,7 +83,7 @@ Each entity typically has:
 ### Relationships
 All entity-to-entity relationships use the type `RELATED_TO` with an `evidence` property:
 ```cypher
-(entity1)-[:RELATED_TO {evidence: "describes the relationship"}]->(entity2)
+(entity1)-[:RELATED_TO {{evidence: "describes the relationship"}}]->(entity2)
 ```
 
 ### Document Structure
@@ -313,7 +313,11 @@ RETURN item.name, org.name, org.ai_summary
 
 ## RESPONSE FORMAT
 
-**CRITICAL: Your final response must be EXTREMELY CONCISE.**
+{response_format_instructions}
+"""
+
+# Response format instructions for different answer styles
+HOTPOTQA_RESPONSE_FORMAT = """**CRITICAL: Your final response must be EXTREMELY CONCISE.**
 
 HotpotQA-style benchmarks expect answers in this exact format:
 - For yes/no questions: respond with just `yes` or `no` (lowercase)
@@ -330,8 +334,27 @@ HotpotQA-style benchmarks expect answers in this exact format:
 
 Your thinking and exploration can be detailed, but your FINAL ANSWER must be just the bare fact.
 
-If you cannot find the answer, respond with: `unknown`
-"""
+If you cannot find the answer, respond with: `unknown`"""
+
+RAGAS_RESPONSE_FORMAT = """Provide a comprehensive, well-reasoned answer based on your graph exploration.
+
+Your response should:
+- Explain your findings clearly and thoroughly
+- Reference the entities and relationships you discovered
+- Include relevant context from the knowledge graph
+- Be suitable for evaluation by semantic similarity metrics
+
+If the information is insufficient, explain what you found and what is missing."""
+
+
+def get_system_prompt(answer_style: str = "hotpotqa") -> str:
+    """Get the system prompt with appropriate response format based on answer_style."""
+    if answer_style == "ragas":
+        response_format = RAGAS_RESPONSE_FORMAT
+    else:
+        response_format = HOTPOTQA_RESPONSE_FORMAT
+    
+    return GRAPH_EXPLORATION_SYSTEM_PROMPT.format(response_format_instructions=response_format)
 
 
 @dataclass 
@@ -355,13 +378,15 @@ class AgenticText2CypherRetriever:
     the knowledge graph and answer questions.
     """
     
-    def __init__(self, model: str = None, provider: str = None):
+    def __init__(self, model: str = None, provider: str = None, answer_style: str = "hotpotqa"):
         """
         Initialize the agentic retriever.
         
         Args:
             model: Override the configured model (e.g., 'gpt-5.2')
             provider: Override the configured provider (e.g., 'openai')
+            answer_style: Response format - "hotpotqa" for short exact answers (EM/F1 benchmarks),
+                         "ragas" for verbose real-world answers
         """
         if not DEEP_AGENTS_AVAILABLE:
             raise ImportError(
@@ -369,13 +394,14 @@ class AgenticText2CypherRetriever:
             )
         
         self.config = get_model_config()
+        self.answer_style = answer_style
         
         # Get model configuration
         effective_model = self.config.effective_agentic_text2cypher_model
         effective_provider = self.config.effective_agentic_text2cypher_provider
         
         logger.info(f"Agentic Text2Cypher - Provider: {effective_provider.value}, "
-                   f"Model: {effective_model.value}")
+                   f"Model: {effective_model.value}, Answer Style: {answer_style}")
         
         # Check if using thinking model
         is_thinking = self.config.is_thinking_model(effective_model)
@@ -385,11 +411,12 @@ class AgenticText2CypherRetriever:
         # Create the LLM
         self.llm = get_agentic_text2cypher_llm()
         
-        # Create the Deep Agent
+        # Create the Deep Agent with answer_style-appropriate prompt
+        system_prompt = get_system_prompt(answer_style)
         self.agent = create_deep_agent(
             model=self.llm,
             tools=AGENT_TOOLS_MINIMAL,
-            system_prompt=GRAPH_EXPLORATION_SYSTEM_PROMPT
+            system_prompt=system_prompt
         )
         
         logger.info("Agentic Text2Cypher retriever initialized")
@@ -488,7 +515,8 @@ class AgenticText2CypherRetriever:
 # Factory function
 def create_agentic_text2cypher_retriever(
     model: str = None,
-    provider: str = None
+    provider: str = None,
+    answer_style: str = "hotpotqa"
 ) -> AgenticText2CypherRetriever:
     """
     Create an Agentic Text2Cypher retriever instance.
@@ -496,15 +524,17 @@ def create_agentic_text2cypher_retriever(
     Args:
         model: Override model (defaults to AGENTIC_TEXT2CYPHER_MODEL or LLM_MODEL)
         provider: Override provider (defaults to AGENTIC_TEXT2CYPHER_PROVIDER or LLM_PROVIDER)
+        answer_style: Response format - "hotpotqa" for short exact answers (EM/F1 benchmarks),
+                     "ragas" for verbose real-world answers
     
     Returns:
         AgenticText2CypherRetriever instance
     """
-    return AgenticText2CypherRetriever(model=model, provider=provider)
+    return AgenticText2CypherRetriever(model=model, provider=provider, answer_style=answer_style)
 
 
 # Main interface function for benchmark system
-def query_agentic_text2cypher_rag(query: str, **kwargs) -> Dict[str, Any]:
+def query_agentic_text2cypher_rag(query: str, answer_style: str = "hotpotqa", **kwargs) -> Dict[str, Any]:
     """
     Agentic Text2Cypher RAG retrieval using Deep Agents.
     
@@ -513,13 +543,15 @@ def query_agentic_text2cypher_rag(query: str, **kwargs) -> Dict[str, Any]:
     
     Args:
         query: The search query
+        answer_style: Response format - "hotpotqa" for short exact answers (EM/F1 benchmarks),
+                     "ragas" for verbose real-world answers (default: hotpotqa for benchmark compatibility)
         **kwargs: Additional configuration options
     
     Returns:
         Dictionary with response and retrieval details
     """
     try:
-        retriever = create_agentic_text2cypher_retriever()
+        retriever = create_agentic_text2cypher_retriever(answer_style=answer_style)
         result = retriever.search(query)
         
         # Format for benchmark compatibility

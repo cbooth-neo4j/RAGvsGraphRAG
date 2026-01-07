@@ -73,8 +73,15 @@ class ChromaRetriever:
             collection_name=self.collection_name
         )
     
-    def search(self, query: str, k: int = 3) -> Dict[str, Any]:
-        """Query ChromaDB and generate LLM response"""
+    def search(self, query: str, k: int = 3, answer_style: str = "ragas") -> Dict[str, Any]:
+        """Query ChromaDB and generate LLM response
+        
+        Args:
+            query: The search query
+            k: Number of documents to retrieve
+            answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        """
+        self._answer_style = answer_style
         
         # Perform similarity search
         docs = self.vectorstore.similarity_search_with_relevance_scores(query, k=k)
@@ -101,8 +108,27 @@ class ChromaRetriever:
         
         context = "\n\n".join(context_parts)
         
-        # Generate LLM response
-        prompt = f"""Based on the following retrieved documents, please provide a comprehensive answer to the question.
+        # Generate LLM response - use answer_style for prompt
+        if getattr(self, '_answer_style', 'ragas') == "hotpotqa":
+            # HotpotQA benchmark requires short, exact answers
+            prompt = f"""Answer the question using ONLY the retrieved documents below.
+
+Question: {query}
+
+Retrieved Documents:
+{context}
+
+CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
+- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
+- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
+- For comparison questions asking "same" or "both": Answer "yes" or "no"
+- NO explanations, NO reasoning, NO sentences - just the bare answer
+- If you cannot determine the answer from the documents, respond with "unknown"
+
+Answer:"""
+        else:
+            # RAGAS/real-world mode: verbose, comprehensive answers
+            prompt = f"""Based on the following retrieved documents, please provide a comprehensive answer to the question.
 
 Question: {query}
 
@@ -146,13 +172,14 @@ def create_chroma_retriever(persist_directory: str = PERSIST_DIRECTORY, collecti
 
 
 # Main interface function for integration with benchmark system
-def query_chroma_rag(query: str, k: int = 3, **kwargs) -> Dict[str, Any]:
+def query_chroma_rag(query: str, k: int = 3, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
     """
     ChromaDB RAG retrieval with LLM response generation
     
     Args:
         query: The search query
         k: Number of similar documents to retrieve
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         **kwargs: Additional configuration options (for compatibility)
     
     Returns:
@@ -160,7 +187,7 @@ def query_chroma_rag(query: str, k: int = 3, **kwargs) -> Dict[str, Any]:
     """
     try:
         retriever = create_chroma_retriever()
-        result = retriever.search(query, k)
+        result = retriever.search(query, k, answer_style=answer_style)
         
         # Format response for benchmark compatibility
         return {
