@@ -356,7 +356,8 @@ def neo4j_read_cypher(query: str) -> str:
     IMPORTANT TIPS:
     - Always check schema first with neo4j_get_schema()
     - Use CONTAINS for fuzzy text matching: WHERE n.name CONTAINS 'term'
-    - For entities, check the 'ai_summary' property - it often has the answer
+    - For entities, check the 'description' property for entity info
+    - Search Chunk.text for detailed information - this has the richest content
     - RELATED_TO relationships have 'evidence' property with relationship details
     - LIMIT your results (e.g., LIMIT 10) to avoid overwhelming output
     

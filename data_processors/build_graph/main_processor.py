@@ -200,7 +200,7 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
     
     def process_directory(self, pdf_dir: str, perform_resolution: bool = True, 
                          prompt_for_advanced: bool = True, auto_advanced: bool = False,
-                         mode: str = 'fresh') -> Dict[str, Any]:
+                         mode: str = 'fresh', lean_mode: bool = False) -> Dict[str, Any]:
         """
         Process all PDF files in a directory.
         
@@ -210,10 +210,18 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             prompt_for_advanced: Show interactive prompt for advanced processing (default True for CLI)
             auto_advanced: Auto-run advanced processing without prompt (backward compatibility)
             mode: 'fresh' (default) or 'add' (skip doc processing, just run advanced)
+            lean_mode: If True, skip ALL advanced processing (no ai_summaries, no communities).
+                      Creates a minimal graph: Document→Chunk→Entity with RELATES_TO edges.
+                      Ideal for query-time intelligence with agentic retrievers.
             
         Returns:
             Overall processing statistics
         """
+        # Lean mode overrides advanced processing flags
+        if lean_mode:
+            prompt_for_advanced = False
+            auto_advanced = False
+            print("[LEAN MODE] Building minimal graph - skipping summaries and communities")
         # If mode is 'add', skip document processing and just run advanced
         if mode == 'add':
             print("\n[ADD] Running advanced processing on existing graph...")
@@ -347,7 +355,8 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
                                  auto_advanced: bool = False,
                                  mode: str = 'fresh',
                                  doc_prefix: str = 'ragbench',
-                                 dataset_name: str = 'RAGBench') -> Dict[str, Any]:
+                                 dataset_name: str = 'RAGBench',
+                                 lean_mode: bool = False) -> Dict[str, Any]:
         """
         Process RAGBench documents with enhanced entity discovery.
         
@@ -360,10 +369,18 @@ class CustomGraphProcessor(EntityDiscoveryMixin, TextProcessingMixin, GraphOpera
             auto_advanced: Auto-run advanced processing without prompt (backward compatibility)
             mode: 'fresh' (default) or 'add' (skip doc processing, just run advanced)
             dataset_name: Name of the dataset for display purposes (default 'RAGBench')
+            lean_mode: If True, skip ALL advanced processing (no ai_summaries, no communities).
+                      Creates a minimal graph: Document→Chunk→Entity with RELATES_TO edges.
+                      Ideal for query-time intelligence with agentic retrievers.
             
         Returns:
             Processing statistics
         """
+        # Lean mode overrides advanced processing flags
+        if lean_mode:
+            prompt_for_advanced = False
+            auto_advanced = False
+            print("[LEAN MODE] Building minimal graph - skipping summaries and communities")
         # If mode is 'add', skip document processing and just run advanced
         if mode == 'add':
             print("\n[ADD] Running advanced processing on existing graph...")

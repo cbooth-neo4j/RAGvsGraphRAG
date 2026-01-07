@@ -23,3 +23,65 @@
 ## Improve retriever performance
 - Improve graphrag retriever performance (it's not much better than vector-only atm, and factual correctness occassionally scores lower?!)
 -- check that im building the graph correctly (im not sure whether the communities are building correctly according to MicrosoftGraphRAG paper and comparing to LLM Graph builder)
+
+## new architecture philosophy:
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    BUILD TIME (Cheap & Fast)                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    Document ──PART_OF──▶ Chunk ──HAS_ENTITY──▶ Entity           │
+│                            │                      │              │
+│                       [embedding]            [embedding]         │
+│                       [text]                 [name]              │
+│                                              [description]       │
+│                                              [entity_type]       │
+│                                                   │              │
+│                                              RELATES_TO          │
+│                                              [evidence]          │
+│                                                                  │
+│    ✅ Entity extraction                                          │
+│    ✅ Entity resolution (via embeddings)                         │
+│    ✅ Relationship extraction                                    │
+│    ❌ NO communities                                             │
+│    ❌ NO ai_summaries                                            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   QUERY TIME (Smart & Guided)                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    Agentic-Text2Cypher:                                         │
+│    1. Parse question → identify entity targets                   │
+│    2. FIND entities (name match / vector search)                │
+│    3. TRAVERSE relationships to discover connections            │
+│    4. READ chunks for detailed context                          │
+│    5. SYNTHESIZE answer from gathered information               │
+│                                                                  │
+│    The agent IS the summarizer (just-in-time, not upfront)      │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   FUTURE: Learn & Cache                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    When a good answer/pattern is found:                         │
+│    • Cache successful query patterns                            │
+│    • Store computed summaries for hot entities                  │
+│    • Build communities on-demand for frequently explored areas  │
+│    • Learn retrieval strategies per question type               │
+│                                                                  │
+│    The graph EVOLVES based on actual usage                      │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+The Philosophy
+Old Approach	New Approach
+Build everything upfront "just in case"	Build minimal, compute "just in time"
+Expensive ingestion, fast retrieval	Cheap ingestion, smart retrieval
+Static graph	Evolving graph that learns
+Pre-computed summaries	Agent-synthesized answers

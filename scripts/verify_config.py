@@ -187,7 +187,7 @@ def verify_configuration():
             print("\n   B) Change your embedding model in .env to match indexes")
             print(f"      (Set EMBEDDING_DIMENSION={indexes[0]['dimensions']} or change EMBEDDING_MODEL)")
             print("\n   C) Re-ingest data with your current embedding model")
-            print("      python data_processors/process_data.py --input PDFs/")
+            print("      python ingest.py --source pdf --quantity 10 --lean")
     
     # Check for common data
     print("\n5️⃣  Checking Data in Neo4j...")
@@ -215,7 +215,7 @@ def verify_configuration():
             if chunk_count == 0 and entity_count == 0:
                 print("\n⚠️  No data found in Neo4j")
                 print("   Run data ingestion:")
-                print("   python data_processors/process_data.py --input PDFs/")
+                print("   python ingest.py --source pdf --quantity 10 --lean")
             else:
                 print("\n✅ Data found in Neo4j")
                 

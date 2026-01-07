@@ -36,50 +36,6 @@ All approaches are evaluated using RAGAS framework with automated visualizations
 - **HotpotQA**: [Multi-hop Question Answering Dataset](https://hotpotqa.github.io/)
 - **Entity Discovery**: 2025 research in ontology discovery and active learning
 
-## 📁 Project Structure
-
-```
-RAGvsGraphRAG/
-├── 📂 data_processors/              # Document processing and graph construction
-│   ├── process_data.py             # 🎯 Main CLI for data processing
-│   ├── build_graph/                # Graph processor
-│   │   ├── main_processor.py       # Main orchestrator class
-│   │   ├── entity_discovery.py     # Research-based entity discovery
-│   │   ├── text_processing.py      # PDF extraction, chunking, embeddings
-│   │   ├── graph_operations.py     # Neo4j operations & entity resolution
-│   │   └── README.md               # Technical deep-dive documentation
-│   ├── chroma_processor.py         # ChromaDB vector processing
-│   └── graph_processor.py          # Legacy processor (use build_graph instead)
-├── 📂 retrievers/                   # RAG retrieval implementations
-│   ├── chroma_retriever.py         # ChromaDB vector similarity search
-│   ├── graph_rag_retriever.py      # Multi-hop graph traversal
-│   ├── advanced_graphrag_retriever.py # Community-enhanced GraphRAG
-│   ├── text2cypher_retriever.py    # Natural language to Cypher (+ verification/correction)
-│   ├── neo4j_vector_retriever.py   # Neo4j vector search
-│   ├── hybrid_cypher_retriever.py  # Combined vector + graph
-│   ├── drift_graphrag_retriever.py # Dynamic reasoning approach
-│   ├── agentic_text2cypher/        # Deep Agent-powered graph exploration
-│   │   ├── retriever.py            # Agentic retriever with adaptive loop
-│   │   └── tools.py                # Neo4j agent tools (schema, cypher, GDS)
-│   └── README.md                   # Retriever usage guide
-├── 📂 benchmark/                    # Evaluation framework
-│   ├── ragas_benchmark.py          # 🎯 Main evaluation CLI
-│   ├── visualizations.py           # Automated chart generation
-│   ├── benchmark.csv               # Default benchmark dataset
-│   ├── hotpotqa/                   # HotpotQA benchmark integration
-│   │   ├── benchmark_pipeline.py   # Main orchestrator
-│   │   ├── data_loader.py          # HotpotQA + Wikipedia downloader
-│   │   ├── wiki_ingester.py        # Neo4j graph ingestion
-│   │   ├── configs.py              # Preset configurations
-│   │   └── README.md               # HotpotQA documentation
-│   └── README.md                   # Benchmarking guide
-├── 📂 benchmark_outputs/           # Generated results and visualizations
-├── 📂 data/                        # Cached datasets (HotpotQA, Wikipedia)
-├── 📂 tests/                       # Test and validation scripts
-├── 📂 PDFs/                        # Source documents for processing
-├── 📂 chroma_db/                   # ChromaDB vector store data
-└── 📄 requirements.txt             # Python dependencies
-```
 
 ## 🚀 Quick Start
 
@@ -118,41 +74,57 @@ docker run --name neo4j-rag \
     neo4j:latest
 ```
 
-### 3. Process Data (Choose One)
+### 3. Build Knowledge Graph (Required)
 
-#### **Option A: Process Your PDFs**
+Use `ingest.py` to build the knowledge graph. You **must** specify:
+- `--source`: Data source (`pdf` or `hotpotqa`)
+- `--quantity`: Number of documents/questions to process
+- `--lean` or `--full`: Build mode
+
 ```bash
-# Place PDFs in PDFs/ folder, then:
-python data_processors/process_data.py --pdfs
+# Build from PDFs (place files in ./PDFs/ folder)
+python ingest.py --source pdf --quantity 10 --lean
+
+# Build from HotpotQA Wikipedia articles
+python ingest.py --source hotpotqa --quantity 100 --lean    # Minimal graph
+python ingest.py --source hotpotqa --quantity 1000 --full   # With summaries + communities
 ```
 
-#### **Option B: Use HotpotQA Benchmark (Recommended)**
+| Mode | Build Time | Features |
+|------|-----------|----------|
+| `--lean` | Fast | Document->Chunk->Entity + RELATES_TO (query-time intelligence) |
+| `--full` | Slower | Adds AI summaries + community detection |
+
+> **Ingestion Manifest:** When ingesting HotpotQA, a manifest is saved to Neo4j (`:__IngestionManifest__` node) 
+> tracking which questions/articles were ingested. The benchmark reads this to ensure question-article pairing.
+> This allows multiple Neo4j instances (lean vs full) to each carry their own manifest.
+
+### 4. Run Benchmark (Test Only)
+
+The benchmark tests **only the questions whose articles were ingested**:
+
 ```bash
-# The HotpotQA benchmark automatically downloads and ingests Wikipedia articles
-# See "Run Evaluation" section below
+# Step 1: Ingest (creates manifest)
+python ingest.py --source hotpotqa --quantity 100 --lean
+
+# Step 2: Benchmark (reads manifest, tests matching questions)
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --hotpotqa --agentic-text2cypher
 ```
 
-### 4. Run Benchmark
-
+**Benchmark commands:**
 ```bash
-# Quick test (1 question) with HotpotQA metrics
-python -m benchmark micro --hotpotqa --agentic-text2cypher
-
-# Mini benchmark (10 questions)
-python -m benchmark mini --hotpotqa --agentic-text2cypher
+# Quick smoke test
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --hotpotqa --agentic-text2cypher
 
 # With RAGAS metrics (LLM-based, slower)
-python -m benchmark mini --ragas --agentic-text2cypher
-
-# Both metric types
-python -m benchmark mini --all-metrics --agentic-text2cypher
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --ragas --agentic-text2cypher
 
 # Compare multiple retrievers
-python -m benchmark smoke --hotpotqa --chroma --graphrag --agentic-text2cypher
-
-# Build database first (downloads Wikipedia, clears Neo4j, ingests)
-python -m benchmark smoke --hotpotqa --graphrag --build-database
+python -m benchmark.hotpotqa.benchmark_pipeline smoke --hotpotqa --chroma --graphrag --neo4j-vector
 ```
+
+> **Note:** The benchmark **only tests** against existing graph data.
+> Questions without matching ingested articles are automatically filtered out.
 
 **Metrics (required - choose one):**
 | Flag | Description | Speed |
@@ -165,20 +137,6 @@ python -m benchmark smoke --hotpotqa --graphrag --build-database
 - **Neo4j Browser**: http://localhost:7474 (explore the knowledge graph)
 - **Charts**: `benchmark_outputs/` folder (performance comparisons)
 - **Detailed Reports**: CSV and JSON outputs with individual Q&A analysis
-
-## ⚡ Global retriever performance benchmarking (before/after)
-
-The repo includes a small harness to benchmark **Advanced GraphRAG global search** before/after optimizations and generate a markdown summary.
-
-### Run benchmarks
-
-```bash
-# Optimized (global-only + single-pass, 1 LLM call)
-python -m benchmark.perf_global_search --impl optimized --runs 1 --cold-start --strategy single_pass
-
-# Baseline (legacy full-graph + map-reduce)
-python -m benchmark.perf_global_search --impl baseline --runs 1 --cold-start --strategy map_reduce
-```
 
 ### Generate a markdown comparison report
 

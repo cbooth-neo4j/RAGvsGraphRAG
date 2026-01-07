@@ -122,7 +122,64 @@ def run_hotpotqa_benchmark(
     questions = corpus["questions"]
     articles = corpus["articles"]
     
-    # Apply question limit if needed
+    # Check for ingestion manifest in Neo4j (source of truth)
+    from neo4j import GraphDatabase
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+    
+    manifest = None
+    try:
+        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        with driver.session() as session:
+            result = session.run("""
+                MATCH (m:__IngestionManifest__ {id: 'current'})
+                RETURN m.source as source, m.ingested_at as ingested_at,
+                       m.questions_count as questions_count, m.articles_count as articles_count,
+                       m.article_titles as article_titles, m.question_ids as question_ids,
+                       m.lean_mode as lean_mode
+            """)
+            record = result.single()
+            if record:
+                manifest = dict(record)
+        driver.close()
+    except Exception as e:
+        print(f"[WARNING] Could not read manifest from Neo4j: {e}")
+    
+    if manifest:
+        ingested_articles = set(manifest.get('article_titles', []) or [])
+        ingested_question_ids = set(manifest.get('question_ids', []) or [])
+        
+        print(f"[MANIFEST] Found in Neo4j: {manifest.get('questions_count', '?')} questions, {manifest.get('articles_count', '?')} articles")
+        print(f"           Ingested at: {manifest.get('ingested_at', 'unknown')}")
+        print(f"           Mode: {'LEAN' if manifest.get('lean_mode') else 'FULL'}")
+        
+        # Filter questions to only those whose supporting articles were ingested
+        original_count = len(questions)
+        filtered_questions = []
+        for q in questions:
+            # Get supporting article titles for this question
+            supporting = set()
+            for sf in q.get('supporting_facts', []):
+                if isinstance(sf, (list, tuple)) and len(sf) >= 1:
+                    supporting.add(sf[0])
+            
+            # Only include if ALL supporting articles were ingested
+            if supporting and supporting.issubset(ingested_articles):
+                filtered_questions.append(q)
+        
+        questions = filtered_questions
+        print(f"[FILTER] Filtered questions from {original_count} to {len(questions)} (matching ingested articles)")
+        
+        if len(questions) == 0:
+            print("\n[ERROR] No questions match the ingested articles!")
+            print("        Run: python ingest.py --source hotpotqa --quantity N --lean")
+            print("        Then re-run this benchmark.")
+            return {"error": "No matching questions", "phases": {}}
+    else:
+        print("[WARNING] No ingestion manifest found in Neo4j - testing may include questions without matching articles")
+        print("          Run: python ingest.py --source hotpotqa --quantity N --lean")
+    
+    # Apply question limit if needed (after manifest filtering)
     if config["question_limit"] and len(questions) > config["question_limit"]:
         questions = questions[:config["question_limit"]]
     
@@ -192,10 +249,10 @@ def run_hotpotqa_benchmark(
             ingester.close()
     else:
         print("[TEST] Testing against existing graph data")
-        print("       ℹ️  Use --build-database to rebuild from HotpotQA Wikipedia articles")
+        print("       ℹ️  To build graph, run: python ingest.py --source hotpotqa --quantity N --lean")
         results["phases"]["ingestion"] = {
             "skipped": True,
-            "reason": "build_database not specified (test-only mode)"
+            "reason": "test-only mode (use ingest.py to build)"
         }
     
     print(f"\n[PHASE 2 COMPLETE] Duration: {time.time() - phase2_start:.1f}s")
@@ -557,17 +614,9 @@ Note: HotpotQA uses short factoid answers. EM/F1 metrics are recommended.
         help="Include Agentic Text2Cypher (Deep Agent-powered graph exploration) in testing"
     )
     
-    parser.add_argument(
-        "--build-database",
-        action="store_true",
-        help="Clear Neo4j and ingest Wikipedia articles before testing (default: test only)"
-    )
-    
-    parser.add_argument(
-        "--skip-advanced",
-        action="store_true",
-        help="Skip advanced processing (community detection + summarization) when building database"
-    )
+    # NOTE: Database building removed. Use ingest.py instead:
+    #   python ingest.py --source hotpotqa --quantity 100 --lean
+    # Then run this benchmark to evaluate.
     
     parser.add_argument(
         "--output-dir",
@@ -623,12 +672,12 @@ Note: HotpotQA uses short factoid answers. EM/F1 metrics are recommended.
     if not retrievers:
         retrievers = None
     
-    # Run benchmark
+    # Run benchmark (test-only, use ingest.py to build database first)
     results = run_hotpotqa_benchmark(
         preset=args.preset,
         retrievers=retrievers,
-        build_database=args.build_database,
-        run_advanced=not args.skip_advanced,
+        build_database=False,  # Always false - use ingest.py to build
+        run_advanced=False,    # Not applicable for test-only mode
         output_dir=args.output_dir,
         cache_dir=args.cache_dir,
         include_ragas=args.ragas
