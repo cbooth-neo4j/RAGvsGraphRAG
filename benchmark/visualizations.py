@@ -2,17 +2,22 @@
 Visualization module for RAG benchmark results
 
 This module provides functions to create charts and visualizations for comparing
-different RAG approaches using RAGAS evaluation metrics.
+different RAG approaches using RAGAS and HotpotQA evaluation metrics.
 """
 
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 
-def create_visualizations(comparison_table: pd.DataFrame, output_dir: str = "benchmark_outputs"):
+def create_visualizations(
+    comparison_table: pd.DataFrame, 
+    output_dir: str = "benchmark_outputs",
+    hotpotqa_results: Optional[Dict] = None,
+    approach_names: Optional[Dict[str, str]] = None
+):
     """Create and save visualization charts for the benchmark results"""
     
     # Set up the plotting style
@@ -53,16 +58,11 @@ def create_visualizations(comparison_table: pd.DataFrame, output_dir: str = "ben
         plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
                 f'{score:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=12)
     
-    plt.title('RAG Approaches: Overall Performance Comparison', fontsize=16, fontweight='bold', pad=20)
-    plt.ylabel('Average RAGAS Score', fontsize=12, fontweight='bold')
-    plt.xlabel('Approach', fontsize=12, fontweight='bold')
+    plt.title('RAGAS Overall Performance', fontsize=16, fontweight='bold', pad=20)
+    plt.ylabel('Average Score', fontsize=12, fontweight='bold')
+    plt.xlabel('Retriever', fontsize=12, fontweight='bold')
     plt.ylim(0, max(avg_scores) * 1.2)
     plt.grid(axis='y', alpha=0.3, linestyle='--')
-    
-    # Add description of what RAGAS measures
-    plt.figtext(0.5, 0.02, 
-                'RAGAS Score: Average of Response Relevancy, Factual Correctness, and Semantic Similarity metrics', 
-                ha='center', fontsize=10, style='italic', color='gray')
     
     # Add winner annotation
     winner_idx = avg_scores.index(max(avg_scores))
@@ -102,35 +102,115 @@ def create_visualizations(comparison_table: pd.DataFrame, output_dir: str = "ben
                     f"{value:.3f}", 
                     ha='center', va='bottom', fontsize=9, rotation=90)
     
-    plt.title('RAG Approaches: Detailed Metrics Comparison', fontsize=16, fontweight='bold', pad=20)
-    plt.ylabel('RAGAS Score', fontsize=12, fontweight='bold')
-    plt.xlabel('Metrics', fontsize=12, fontweight='bold')
+    plt.title('RAGAS Metrics Comparison', fontsize=16, fontweight='bold', pad=20)
+    plt.ylabel('Score', fontsize=12, fontweight='bold')
+    plt.xlabel('Metric', fontsize=12, fontweight='bold')
     plt.xticks(x, comparison_table['Metric'], fontsize=11)
     plt.legend(fontsize=11, loc='upper right')
     plt.grid(axis='y', alpha=0.3, linestyle='--')
     plt.ylim(0, 1.1)
     
-    # Add metric descriptions (updated for universal metrics)
-    metric_descriptions = {
-        'Response Relevancy': 'How well the answer addresses the question asked',
-        'Factual Correctness': 'How accurate the facts are compared to ground truth',
-        'Semantic Similarity': 'How well the meaning matches the expected answer'
-    }
-    
-    # Add descriptions below x-axis labels
-    for i, metric in enumerate(comparison_table['Metric']):
-        if metric in metric_descriptions:
-            plt.text(i, -0.15, metric_descriptions[metric], 
-                    ha='center', va='top', fontsize=9, 
-                    style='italic', color='gray', wrap=True)
-    
-    # Adjust layout to accommodate descriptions
-    plt.subplots_adjust(bottom=0.25)
-    
     plt.tight_layout()
     plt.savefig(f"{output_dir}/detailed_metrics_comparison.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"\n📊 Generated 2 visualization charts in '{output_dir}/' folder:")
+    charts_created = 2
+    
+    # Chart 3: HotpotQA Metrics (if provided)
+    if hotpotqa_results:
+        plt.figure(figsize=(14, 8))
+        
+        # Prepare data
+        retrievers = list(hotpotqa_results.keys())
+        retriever_labels = [approach_names.get(r, r) if approach_names else r for r in retrievers]
+        em_scores = [hotpotqa_results[r].get('exact_match', 0) for r in retrievers]
+        f1_scores = [hotpotqa_results[r].get('f1', 0) for r in retrievers]
+        
+        x = range(len(retrievers))
+        width = 0.35
+        
+        # Create grouped bars
+        bars1 = plt.bar([i - width/2 for i in x], em_scores, width, 
+                       label='Exact Match (EM)', color='#2ecc71', alpha=0.8, edgecolor='black')
+        bars2 = plt.bar([i + width/2 for i in x], f1_scores, width,
+                       label='F1 Score', color='#3498db', alpha=0.8, edgecolor='black')
+        
+        # Add value labels
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                plt.text(bar.get_x() + bar.get_width()/2, height + 0.02,
+                        f'{height:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=11)
+        
+        plt.title('HotpotQA Native Metrics: Exact Match & F1 Score', fontsize=16, fontweight='bold', pad=20)
+        plt.ylabel('Score', fontsize=12, fontweight='bold')
+        plt.xlabel('Retriever', fontsize=12, fontweight='bold')
+        plt.xticks(x, retriever_labels, fontsize=11)
+        plt.legend(fontsize=11, loc='upper right')
+        plt.grid(axis='y', alpha=0.3, linestyle='--')
+        plt.ylim(0, 1.15)
+        
+        # Add description
+        plt.figtext(0.5, 0.02,
+                   'HotpotQA Metrics: Standard benchmark metrics for factoid question answering',
+                   ha='center', fontsize=10, style='italic', color='gray')
+        
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/hotpotqa_metrics_comparison.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        charts_created += 1
+    
+    # Chart 4: Combined Overview (if HotpotQA results available)
+    if hotpotqa_results:
+        fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+        
+        # Left: HotpotQA metrics (primary for this benchmark)
+        ax1 = axes[0]
+        retrievers = list(hotpotqa_results.keys())
+        retriever_labels = [approach_names.get(r, r) if approach_names else r for r in retrievers]
+        
+        # Calculate combined HotpotQA score (average of EM and F1)
+        combined_scores = [(hotpotqa_results[r].get('exact_match', 0) + hotpotqa_results[r].get('f1', 0)) / 2 
+                          for r in retrievers]
+        
+        colors_hotpot = ['#27ae60' if s >= 0.8 else '#f39c12' if s >= 0.5 else '#e74c3c' for s in combined_scores]
+        bars = ax1.bar(retriever_labels, combined_scores, color=colors_hotpot, alpha=0.8, edgecolor='black')
+        
+        for bar, score in zip(bars, combined_scores):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f'{score:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=11)
+        
+        ax1.set_title('HotpotQA Score\n(Primary Metric)', fontsize=14, fontweight='bold')
+        ax1.set_ylabel('Average of EM + F1', fontsize=11)
+        ax1.set_ylim(0, 1.15)
+        ax1.grid(axis='y', alpha=0.3, linestyle='--')
+        ax1.axhline(y=0.8, color='green', linestyle='--', alpha=0.5, label='Good (0.8)')
+        ax1.axhline(y=0.5, color='orange', linestyle='--', alpha=0.5, label='Fair (0.5)')
+        
+        # Right: RAGAS metrics (secondary)
+        ax2 = axes[1]
+        ragas_avg = [comparison_table[approach].mean() for approach in available_approaches]
+        colors_ragas = ['#3498db'] * len(available_approaches)
+        bars2 = ax2.bar(available_approaches, ragas_avg, color=colors_ragas, alpha=0.8, edgecolor='black')
+        
+        for bar, score in zip(bars2, ragas_avg):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f'{score:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=11)
+        
+        ax2.set_title('RAGAS Score\n(Secondary Metric)', fontsize=14, fontweight='bold')
+        ax2.set_ylabel('Average RAGAS Score', fontsize=11)
+        ax2.set_ylim(0, 1.15)
+        ax2.grid(axis='y', alpha=0.3, linestyle='--')
+        
+        plt.suptitle('Benchmark Overview: HotpotQA vs RAGAS Metrics', fontsize=16, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/benchmark_overview.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        charts_created += 1
+    
+    print(f"\n📊 Generated {charts_created} visualization charts in '{output_dir}/' folder:")
     print("  - overall_performance_comparison.png")
-    print("  - detailed_metrics_comparison.png") 
+    print("  - detailed_metrics_comparison.png")
+    if hotpotqa_results:
+        print("  - hotpotqa_metrics_comparison.png")
+        print("  - benchmark_overview.png")

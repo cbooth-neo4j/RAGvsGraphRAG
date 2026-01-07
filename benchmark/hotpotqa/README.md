@@ -55,21 +55,31 @@ python -m benchmark.hotpotqa.benchmark_pipeline full
 python -m benchmark.hotpotqa.benchmark_pipeline [preset] [options]
 
 Positional Arguments:
-  preset              Benchmark preset: smoke, dev, full, mini (default: smoke)
+  preset                    Benchmark preset: smoke, dev, full, mini (default: smoke)
 
-Options:
-  --retrievers        Specific retrievers to test (overrides preset)
-  --skip-ingestion    Skip graph ingestion (use existing graph)
-  --output-dir        Output directory for results
-  --cache-dir         Cache directory for downloaded data
-  --list-presets      List available presets and exit
+Retriever Flags:
+  --chroma                  Include ChromaDB RAG in testing
+  --graphrag                Include GraphRAG in testing
+  --text2cypher             Include Text2Cypher in testing
+  --advanced-graphrag       Include Advanced GraphRAG in testing
+  --drift-graphrag          Include DRIFT GraphRAG in testing
+  --neo4j-vector            Include Neo4j Vector RAG in testing
+  --hybrid-cypher           Include Hybrid Cypher RAG in testing
+  --agentic-text2cypher     Include Agentic Text2Cypher in testing
+
+Other Options:
+  --build-database          Clear Neo4j and ingest Wikipedia articles
+  --skip-advanced           Skip advanced processing (community detection)
+  --output-dir              Output directory for results
+  --cache-dir               Cache directory for downloaded data
+  --list-presets            List available presets and exit
 
 Examples:
   # Test specific retrievers
-  python -m benchmark.hotpotqa.benchmark_pipeline dev --retrievers chroma graphrag hybrid_cypher
+  python -m benchmark.hotpotqa.benchmark_pipeline dev --chroma --graphrag --hybrid-cypher
 
-  # Skip re-ingesting if graph already populated
-  python -m benchmark.hotpotqa.benchmark_pipeline dev --skip-ingestion
+  # Test the agentic retriever
+  python -m benchmark.hotpotqa.benchmark_pipeline micro --agentic-text2cypher
 ```
 
 ## Module Structure
@@ -90,25 +100,32 @@ benchmark/hotpotqa/
 |-----------|-------------|
 | `chroma` | ChromaDB vector similarity search |
 | `graphrag` | Basic GraphRAG with chunk traversal |
-| `advanced_graphrag` | Intelligent global/local/hybrid routing |
-| `drift_graphrag` | DRIFT iterative refinement |
-| `hybrid_cypher` | Hybrid vector + Cypher neighborhood |
-| `neo4j_vector` | Pure Neo4j vector similarity |
+| `advanced-graphrag` | Intelligent global/local/hybrid routing |
+| `drift-graphrag` | DRIFT iterative refinement |
+| `hybrid-cypher` | Hybrid vector + Cypher neighborhood |
+| `neo4j-vector` | Pure Neo4j vector similarity |
 | `text2cypher` | Natural language to Cypher |
+| `agentic-text2cypher` | Deep Agent-powered adaptive graph exploration |
 
 ## Output Files
 
-After running a benchmark, outputs are saved to the output directory:
+After running a benchmark, outputs are saved to a timestamped folder for tracking runs:
 
 ```
 benchmark_outputs/hotpotqa/
-├── hotpotqa_benchmark_results.json   # Complete results
-├── simple_benchmark_comparison.csv   # Metric comparison
-├── simple_benchmark_*.csv            # Per-retriever results
-├── detailed_comparison.csv           # Detailed analysis
-├── overall_performance_comparison.png
-└── detailed_metrics_comparison.png
+├── 2026-01-07_14-30-45/              # Timestamped run folder
+│   ├── hotpotqa_benchmark_results.json   # Complete results
+│   ├── simple_benchmark_comparison.csv   # Metric comparison
+│   ├── simple_benchmark_*.csv            # Per-retriever results
+│   ├── detailed_comparison.csv           # Detailed analysis
+│   ├── overall_performance_comparison.png
+│   └── detailed_metrics_comparison.png
+├── 2026-01-08_09-15-22/              # Another run
+│   └── ...
+└── ...
 ```
+
+Each run creates a new timestamped folder (`YYYY-MM-DD_HH-MM-SS`) making it easy to compare results across different benchmark runs.
 
 ## Metrics
 

@@ -164,6 +164,199 @@ class LLMFactory:
                 model_params=config.get_model_params())
         else:
             raise ValueError(f"Unsupported LLM provider: {config.llm_provider}")
+    
+    @staticmethod
+    def create_text2cypher_llm(config: ModelConfig = None, **kwargs) -> Any:
+        """
+        Create a Neo4j GraphRAG compatible LLM instance for Text2Cypher
+        
+        Uses TEXT2CYPHER_MODEL and TEXT2CYPHER_PROVIDER if configured,
+        otherwise falls back to the main LLM settings.
+        
+        Args:
+            config: Model configuration (uses global config if None)
+            **kwargs: Additional parameters to pass to the model
+            
+        Returns:
+            Neo4j GraphRAG LLM instance configured for Text2Cypher
+        """
+        if not NEO4J_GRAPHRAG_AVAILABLE:
+            raise ImportError("neo4j_graphrag is required for Neo4j LLM instances")
+        
+        if config is None:
+            config = get_model_config()
+        
+        # Get effective Text2Cypher provider and model (falls back to main LLM if not specified)
+        effective_provider = config.effective_text2cypher_provider
+        effective_model = config.effective_text2cypher_model
+        
+        logger.info(f"Text2Cypher LLM - Provider: {effective_provider.value}, Model: {effective_model.value}")
+        
+        if effective_provider == ModelProvider.OPENAI:
+            model_params = config.get_model_params()
+            model_params.update(kwargs)
+            return OpenAILLM(
+                model_name=effective_model.value,
+                model_params=model_params
+            )
+        elif effective_provider == ModelProvider.OLLAMA:
+            # For Ollama, we'll use the regular LangChain ChatOllama
+            # as Neo4j GraphRAG doesn't have native Ollama support
+            warnings.warn("Using LangChain ChatOllama instead of Neo4j GraphRAG LLM for Ollama Text2Cypher")
+            
+            base_timeout = int(os.getenv('OLLAMA_REQUEST_TIMEOUT', '300'))
+            model_params = config.get_model_params()
+            model_params.update(kwargs)
+            
+            ollama_params = {
+                'model': effective_model.value,
+                'base_url': config.ollama_base_url,
+                'timeout': base_timeout,
+                'keep_alive': os.getenv('OLLAMA_KEEP_ALIVE', '10m'),
+                **model_params
+            }
+            return ChatOllama(**ollama_params)
+        elif effective_provider == ModelProvider.VERTEXAI:
+            if not VERTEXAI_AVAILABLE:
+                raise ImportError("VertexAI dependencies not installed. Install with: pip install langchain-google-vertexai")
+            credentials = Credentials(token=None, refresh_handler=get_new_token)
+            init_vertexai(vertex_env, token_roller)
+            model_params = config.get_model_params()
+            model_params.update(kwargs)
+            from utils.neo4j_vertexai_llm_updated import CustomVertexAILLM
+            return CustomVertexAILLM(
+                model=effective_model.value,
+                credentials=credentials,
+                temperature=0.0,
+                top_p=1,
+                seed=0,
+                max_output_tokens=65535,
+                project="prj-gen-ai-9571",
+                model_params=config.get_model_params())
+        else:
+            raise ValueError(f"Unsupported Text2Cypher LLM provider: {effective_provider}")
+    
+    @staticmethod
+    def create_text2cypher_langchain_llm(config: ModelConfig = None, **kwargs) -> Union[ChatOpenAI, ChatOllama, ChatVertexAI]:
+        """
+        Create a LangChain-compatible LLM instance using Text2Cypher model settings
+        
+        This is used for verification and correction in the iterative refinement loop,
+        which requires a standard LangChain LLM (not the Neo4j-specific wrapper).
+        
+        Uses TEXT2CYPHER_MODEL and TEXT2CYPHER_PROVIDER if configured,
+        otherwise falls back to the main LLM settings.
+        
+        Args:
+            config: Model configuration (uses global config if None)
+            **kwargs: Additional parameters to pass to the model
+            
+        Returns:
+            LangChain LLM instance (ChatOpenAI, ChatOllama, or ChatVertexAI)
+        """
+        if config is None:
+            config = get_model_config()
+        
+        # Get effective Text2Cypher provider and model (falls back to main LLM if not specified)
+        effective_provider = config.effective_text2cypher_provider
+        effective_model = config.effective_text2cypher_model
+        
+        logger.debug(f"Text2Cypher LangChain LLM - Provider: {effective_provider.value}, Model: {effective_model.value}")
+        
+        # Merge configuration parameters with kwargs
+        model_params = config.get_model_params()
+        model_params.update(kwargs)
+        
+        if effective_provider == ModelProvider.OPENAI:
+            os.environ.pop('SSL_CERT_FILE', None)
+            return ChatOpenAI(
+                model=effective_model.value,
+                openai_api_key=config.openai_api_key,
+                **model_params
+            )
+        elif effective_provider == ModelProvider.OLLAMA:
+            base_timeout = int(os.getenv('OLLAMA_REQUEST_TIMEOUT', '300'))
+            ollama_params = {
+                'model': effective_model.value,
+                'base_url': config.ollama_base_url,
+                'timeout': base_timeout,
+                'keep_alive': os.getenv('OLLAMA_KEEP_ALIVE', '10m'),
+                **model_params
+            }
+            return ChatOllama(**ollama_params)
+        elif effective_provider == ModelProvider.VERTEXAI:
+            if not VERTEXAI_AVAILABLE:
+                raise ImportError("VertexAI dependencies not installed. Install with: pip install langchain-google-vertexai")
+            logger.debug("Creating LangChain VertexAI LLM for Text2Cypher verification/correction")
+            return get_vertex_llm()
+        else:
+            raise ValueError(f"Unsupported Text2Cypher LLM provider: {effective_provider}")
+    
+    @staticmethod
+    def create_agentic_text2cypher_llm(config: ModelConfig = None, **kwargs) -> Union[ChatOpenAI, ChatOllama, ChatVertexAI]:
+        """
+        Create a LangChain-compatible LLM instance for Agentic Text2Cypher (Deep Agent)
+        
+        Uses AGENTIC_TEXT2CYPHER_MODEL and AGENTIC_TEXT2CYPHER_PROVIDER if configured,
+        otherwise falls back to the main LLM settings.
+        
+        Special handling for thinking models (gpt-5.2, o3) - no temperature parameter.
+        
+        Args:
+            config: Model configuration (uses global config if None)
+            **kwargs: Additional parameters to pass to the model
+            
+        Returns:
+            LangChain LLM instance (ChatOpenAI, ChatOllama, or ChatVertexAI)
+        """
+        if config is None:
+            config = get_model_config()
+        
+        # Get effective Agentic Text2Cypher provider and model
+        effective_provider = config.effective_agentic_text2cypher_provider
+        effective_model = config.effective_agentic_text2cypher_model
+        
+        logger.info(f"Agentic Text2Cypher LLM - Provider: {effective_provider.value}, Model: {effective_model.value}")
+        
+        # Check if this is a thinking model (special handling - no temperature)
+        is_thinking = ModelConfig.is_thinking_model(effective_model)
+        if is_thinking:
+            logger.info(f"Using thinking model {effective_model.value} - temperature parameter will be omitted")
+        
+        # Build model params - exclude temperature for thinking models
+        model_params = {}
+        if not is_thinking:
+            model_params = config.get_model_params()
+        model_params.update(kwargs)
+        
+        # Remove temperature for thinking models even if passed in kwargs
+        if is_thinking and 'temperature' in model_params:
+            del model_params['temperature']
+        
+        if effective_provider == ModelProvider.OPENAI:
+            os.environ.pop('SSL_CERT_FILE', None)
+            return ChatOpenAI(
+                model=effective_model.value,
+                openai_api_key=config.openai_api_key,
+                **model_params
+            )
+        elif effective_provider == ModelProvider.OLLAMA:
+            base_timeout = int(os.getenv('OLLAMA_REQUEST_TIMEOUT', '300'))
+            ollama_params = {
+                'model': effective_model.value,
+                'base_url': config.ollama_base_url,
+                'timeout': base_timeout,
+                'keep_alive': os.getenv('OLLAMA_KEEP_ALIVE', '10m'),
+                **model_params
+            }
+            return ChatOllama(**ollama_params)
+        elif effective_provider == ModelProvider.VERTEXAI:
+            if not VERTEXAI_AVAILABLE:
+                raise ImportError("VertexAI dependencies not installed. Install with: pip install langchain-google-vertexai")
+            logger.debug("Creating LangChain VertexAI LLM for Agentic Text2Cypher")
+            return get_vertex_llm()
+        else:
+            raise ValueError(f"Unsupported Agentic Text2Cypher LLM provider: {effective_provider}")
 
 class EmbeddingFactory:
     """Factory for creating embedding model instances"""
@@ -258,3 +451,36 @@ def get_neo4j_llm(**kwargs) -> Any:
 def get_neo4j_embeddings(**kwargs) -> Any:
     """Get Neo4j GraphRAG compatible embedding instance with current configuration"""
     return EmbeddingFactory.create_neo4j_embeddings(**kwargs)
+
+def get_text2cypher_llm(**kwargs) -> Any:
+    """
+    Get Neo4j GraphRAG compatible LLM instance for Text2Cypher
+    
+    Uses TEXT2CYPHER_MODEL and TEXT2CYPHER_PROVIDER if configured,
+    otherwise falls back to the main LLM settings (LLM_MODEL and LLM_PROVIDER).
+    """
+    logger.debug(f"In get_text2cypher_llm with kwargs: {kwargs}")
+    return LLMFactory.create_text2cypher_llm(**kwargs)
+
+def get_text2cypher_langchain_llm(**kwargs) -> Union[ChatOpenAI, ChatOllama, ChatVertexAI]:
+    """
+    Get LangChain-compatible LLM instance using Text2Cypher model settings
+    
+    Used for verification and correction in the iterative refinement loop.
+    Uses TEXT2CYPHER_MODEL and TEXT2CYPHER_PROVIDER if configured,
+    otherwise falls back to the main LLM settings.
+    """
+    logger.debug(f"In get_text2cypher_langchain_llm with kwargs: {kwargs}")
+    return LLMFactory.create_text2cypher_langchain_llm(**kwargs)
+
+def get_agentic_text2cypher_llm(**kwargs) -> Union[ChatOpenAI, ChatOllama, ChatVertexAI]:
+    """
+    Get LangChain-compatible LLM instance for Agentic Text2Cypher (Deep Agent)
+    
+    Uses AGENTIC_TEXT2CYPHER_MODEL and AGENTIC_TEXT2CYPHER_PROVIDER if configured,
+    otherwise falls back to the main LLM settings.
+    
+    Special handling for thinking models (gpt-5.2, o3) - no temperature parameter.
+    """
+    logger.debug(f"In get_agentic_text2cypher_llm with kwargs: {kwargs}")
+    return LLMFactory.create_agentic_text2cypher_llm(**kwargs)

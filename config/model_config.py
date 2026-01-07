@@ -38,9 +38,9 @@ class EmbeddingModel(Enum):
 class LLMModel(Enum):
     """Supported LLM models"""
     # OpenAI models
-    OPENAI_GPT_4O_MINI = "gpt-4o-mini"
+    OPENAI_GPT_41 = "gpt-4.1"
     OPENAI_GPT_41_MINI = "gpt-4.1-mini"
-
+    OPENAI_GPT_52 = "gpt-5.2"  # Thinking model with 400K context
     
     # Ollama models - Add new models as needed
     OLLAMA_QWEN3_8B = "qwen3:8b"
@@ -71,6 +71,19 @@ class ModelConfig:
     temperature: float = 0.0
     seed: Optional[int] = 42
     max_tokens: Optional[int] = None
+    
+    # Text2Cypher specific settings (optional - defaults to main LLM settings)
+    text2cypher_provider: Optional[ModelProvider] = None
+    text2cypher_model: Optional[LLMModel] = None
+    text2cypher_enable_refinement: bool = True
+    text2cypher_max_iterations: int = 3
+    text2cypher_verifiers: list = None  # List of verifier types: 'syntax', 'execution', 'llm'
+    text2cypher_correctors: list = None  # List of corrector types: 'rule_based', 'llm'
+    
+    # Agentic Text2Cypher settings (Deep Agent based)
+    agentic_text2cypher_provider: Optional[ModelProvider] = None
+    agentic_text2cypher_model: Optional[LLMModel] = None
+    agentic_text2cypher_max_iterations: int = 10  # Agent can iterate more
     
     # Ollama specific settings
     ollama_base_url: str = "http://localhost:11434"
@@ -104,13 +117,67 @@ class ModelConfig:
         # Load provider-specific settings
         self.ollama_base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        # Load Text2Cypher specific settings (optional - falls back to main LLM settings)
+        text2cypher_provider_str = os.getenv('TEXT2CYPHER_PROVIDER')
+        text2cypher_model_str = os.getenv('TEXT2CYPHER_MODEL')
+        
+        # Only set if explicitly configured, otherwise None (will use main LLM)
+        if text2cypher_provider_str:
+            try:
+                self.text2cypher_provider = ModelProvider(text2cypher_provider_str)
+            except ValueError:
+                logger.warning(f"Invalid TEXT2CYPHER_PROVIDER '{text2cypher_provider_str}', using main LLM provider")
+                self.text2cypher_provider = None
+        else:
+            self.text2cypher_provider = None
+            
+        if text2cypher_model_str:
+            self.text2cypher_model = self._get_llm_model_enum(text2cypher_model_str)
+        else:
+            self.text2cypher_model = None
+            
+        # Load Text2Cypher refinement settings
+        self.text2cypher_enable_refinement = os.getenv('TEXT2CYPHER_ENABLE_REFINEMENT', 'true').lower() == 'true'
+        self.text2cypher_max_iterations = int(os.getenv('TEXT2CYPHER_MAX_ITERATIONS', '3'))
+        
+        # Load Text2Cypher verification and correction methods
+        verifiers_str = os.getenv('TEXT2CYPHER_VERIFIERS', 'syntax,execution')
+        self.text2cypher_verifiers = [v.strip().lower() for v in verifiers_str.split(',') if v.strip()]
+        
+        correctors_str = os.getenv('TEXT2CYPHER_CORRECTORS', 'rule_based,llm')
+        self.text2cypher_correctors = [c.strip().lower() for c in correctors_str.split(',') if c.strip()]
+        
+        logger.debug(f"Text2Cypher verifiers: {self.text2cypher_verifiers}")
+        logger.debug(f"Text2Cypher correctors: {self.text2cypher_correctors}")
+        
+        # Load Agentic Text2Cypher settings
+        agentic_provider_str = os.getenv('AGENTIC_TEXT2CYPHER_PROVIDER')
+        agentic_model_str = os.getenv('AGENTIC_TEXT2CYPHER_MODEL')
+        
+        if agentic_provider_str:
+            try:
+                self.agentic_text2cypher_provider = ModelProvider(agentic_provider_str)
+            except ValueError:
+                logger.warning(f"Invalid AGENTIC_TEXT2CYPHER_PROVIDER '{agentic_provider_str}', using main LLM provider")
+                self.agentic_text2cypher_provider = None
+        else:
+            self.agentic_text2cypher_provider = None
+            
+        if agentic_model_str:
+            self.agentic_text2cypher_model = self._get_llm_model_enum(agentic_model_str)
+        else:
+            self.agentic_text2cypher_model = None
+            
+        self.agentic_text2cypher_max_iterations = int(os.getenv('AGENTIC_TEXT2CYPHER_MAX_ITERATIONS', '10'))
     
     def _get_llm_model_enum(self, model_name: str) -> LLMModel:
         """Convert model name string to LLMModel enum"""
         model_mapping = {
             # OpenAI models
-            'gpt-4o-mini': LLMModel.OPENAI_GPT_4O_MINI,
+            'gpt-4.1': LLMModel.OPENAI_GPT_41,
             'gpt-4.1-mini': LLMModel.OPENAI_GPT_41_MINI,
+            'gpt-5.2': LLMModel.OPENAI_GPT_52,
             # Ollama models
             'qwen3:8b': LLMModel.OLLAMA_QWEN3_8B,
             'gemma3:1b': LLMModel.OLLAMA_GEMMA3_7B,
@@ -182,6 +249,34 @@ class ModelConfig:
         if self.max_tokens is not None:
             params["max_tokens"] = self.max_tokens
         return params
+    
+    @property
+    def effective_text2cypher_provider(self) -> ModelProvider:
+        """Get the effective Text2Cypher provider (falls back to main LLM provider)"""
+        return self.text2cypher_provider if self.text2cypher_provider is not None else self.llm_provider
+    
+    @property
+    def effective_text2cypher_model(self) -> LLMModel:
+        """Get the effective Text2Cypher model (falls back to main LLM model)"""
+        return self.text2cypher_model if self.text2cypher_model is not None else self.llm_model
+    
+    @property
+    def effective_agentic_text2cypher_provider(self) -> ModelProvider:
+        """Get the effective Agentic Text2Cypher provider (falls back to main LLM provider)"""
+        return self.agentic_text2cypher_provider if self.agentic_text2cypher_provider is not None else self.llm_provider
+    
+    @property
+    def effective_agentic_text2cypher_model(self) -> LLMModel:
+        """Get the effective Agentic Text2Cypher model (falls back to main LLM model)"""
+        return self.agentic_text2cypher_model if self.agentic_text2cypher_model is not None else self.llm_model
+    
+    @staticmethod
+    def is_thinking_model(model: LLMModel) -> bool:
+        """Check if a model is a 'thinking' model that requires special handling (no temperature)"""
+        thinking_models = {
+            LLMModel.OPENAI_GPT_52,
+        }
+        return model in thinking_models
 
 # Global configuration instance
 _config = None

@@ -12,6 +12,7 @@ A comprehensive evaluation framework comparing various RAG approaches using the 
 5. **Neo4j Vector** - Graph database vector search (`--neo4j-vector`)
 6. **Hybrid Cypher** - Combined vector + graph traversal (`--hybrid-cypher`)
 7. **DRIFT GraphRAG** - Dynamic reasoning with iterative fact-finding (`--drift-graphrag`)
+8. **Agentic Text2Cypher** - Deep Agent-powered adaptive graph exploration (`--agentic-text2cypher`)
 
 ### **🧠 Ontology & Entity Discovery**
 - **Research-based corpus sampling** with TF-IDF clustering and stratified selection
@@ -31,6 +32,7 @@ All approaches are evaluated using RAGAS framework with automated visualizations
 - **GraphRAG Patterns**: [Neo4j GraphRAG Field Guide](https://neo4j.com/blog/developer/graphrag-field-guide-rag-patterns/)
 - **Microsoft GraphRAG**: [Community Summary Retrievers](https://graphrag.com/reference/graphrag/global-community-summary-retriever/)
 - **DRIFT Algorithm**: [Microsoft DRIFT Research](https://www.microsoft.com/en-us/research/blog/introducing-drift-search-combining-global-and-local-search-methods-to-improve-quality-and-efficiency/)
+- **Deep Agents**: [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) - Agentic planning with subagent spawning
 - **HotpotQA**: [Multi-hop Question Answering Dataset](https://hotpotqa.github.io/)
 - **Entity Discovery**: 2025 research in ontology discovery and active learning
 
@@ -52,10 +54,13 @@ RAGvsGraphRAG/
 │   ├── chroma_retriever.py         # ChromaDB vector similarity search
 │   ├── graph_rag_retriever.py      # Multi-hop graph traversal
 │   ├── advanced_graphrag_retriever.py # Community-enhanced GraphRAG
-│   ├── text2cypher_retriever.py    # Natural language to Cypher
+│   ├── text2cypher_retriever.py    # Natural language to Cypher (+ verification/correction)
 │   ├── neo4j_vector_retriever.py   # Neo4j vector search
 │   ├── hybrid_cypher_retriever.py  # Combined vector + graph
 │   ├── drift_graphrag_retriever.py # Dynamic reasoning approach
+│   ├── agentic_text2cypher/        # Deep Agent-powered graph exploration
+│   │   ├── retriever.py            # Agentic retriever with adaptive loop
+│   │   └── tools.py                # Neo4j agent tools (schema, cypher, GDS)
 │   └── README.md                   # Retriever usage guide
 ├── 📂 benchmark/                    # Evaluation framework
 │   ├── ragas_benchmark.py          # 🎯 Main evaluation CLI
@@ -127,32 +132,34 @@ python data_processors/process_data.py --pdfs
 # See "Run Evaluation" section below
 ```
 
-### 4. Run Evaluation
+### 4. Run Benchmark
 
-#### **Quick Benchmark (Default CSV)**
 ```bash
-# Compare all RAG approaches (uses default benchmark.csv)
-python benchmark/ragas_benchmark.py --all
+# Quick test (1 question) with HotpotQA metrics
+python -m benchmark micro --hotpotqa --agentic-text2cypher
 
-# Selective testing
-python benchmark/ragas_benchmark.py --chroma --graphrag --hybrid-cypher
+# Mini benchmark (10 questions)
+python -m benchmark mini --hotpotqa --agentic-text2cypher
+
+# With RAGAS metrics (LLM-based, slower)
+python -m benchmark mini --ragas --agentic-text2cypher
+
+# Both metric types
+python -m benchmark mini --all-metrics --agentic-text2cypher
+
+# Compare multiple retrievers
+python -m benchmark smoke --hotpotqa --chroma --graphrag --agentic-text2cypher
+
+# Build database first (downloads Wikipedia, clears Neo4j, ingests)
+python -m benchmark smoke --hotpotqa --graphrag --build-database
 ```
 
-#### **HotpotQA Benchmark**
-```bash
-# Build database + test (first run - downloads Wikipedia, ingests, then tests)
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
-
-# Build database WITHOUT community detection (faster, basic retrievers only)
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --skip-advanced
-
-# Test only (subsequent runs - uses existing graph data)
-python -m benchmark.hotpotqa.benchmark_pipeline smoke
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers chroma graphrag hybrid_cypher
-
-# Full evaluation (~7400 questions, ~$100+)
-python -m benchmark.hotpotqa.benchmark_pipeline full --build-database
-```
+**Metrics (required - choose one):**
+| Flag | Description | Speed |
+|------|-------------|-------|
+| `--hotpotqa` | Exact Match + F1 Score | Fast, deterministic |
+| `--ragas` | LLM-based semantic evaluation | Slower |
+| `--all-metrics` | Both HotpotQA and RAGAS | Slowest |
 
 ### 5. View Results
 - **Neo4j Browser**: http://localhost:7474 (explore the knowledge graph)
@@ -196,14 +203,15 @@ python -m benchmark.report_global_perf \
 - **Multiple presets** for quick testing to full evaluation
 - **Research-grade evaluation** matching academic benchmarks
 
-### **🔍 7 Retrieval Approaches**
+### **🔍 8 Retrieval Approaches**
 - **ChromaDB RAG** - Fast vector similarity search
 - **GraphRAG** - Multi-hop graph traversal with entity resolution
 - **Advanced GraphRAG** - Community detection and element summarization  
-- **Text2Cypher** - Natural language to database queries
+- **Text2Cypher** - Natural language to database queries with iterative refinement
 - **Neo4j Vector** - Graph database vector search
 - **Hybrid Cypher** - Combined vector + graph approach
 - **DRIFT GraphRAG** - Dynamic reasoning with iterative refinement
+- **Agentic Text2Cypher** - Deep Agent-powered adaptive exploration with thinking models
 
 ### **📊 Comprehensive Evaluation**
 - **RAGAS metrics** - Response Relevancy, Factual Correctness, Semantic Similarity
@@ -227,6 +235,7 @@ python -m benchmark.report_global_perf \
 - **OpenAI API Key** (for embeddings and LLM processing)
 - **8GB+ RAM** (for larger datasets)
 - **Optional**: scikit-learn (for enhanced entity discovery)
+- **Optional**: deepagents (for `agentic_text2cypher` retriever)
 
 ### 2. GraphRAG  
 Neo4j graph-enhanced vector search with **dynamic entity discovery**. Automatically discovers entity types from your documents with CLI approval. Includes LLM-based entity resolution to merge duplicates.
@@ -242,6 +251,23 @@ Natural language to Cypher query translation with direct Neo4j graph database qu
 
 ### 6. Neo4j Vector RAG 
 Pure Neo4j vector similarity search using native vector operations without graph traversal for fast retrieval - good to compare against vector only databases such as ChromaDB.
+
+### 7. Agentic Text2Cypher RAG
+Deep Agent-powered adaptive graph exploration using an agentic loop instead of fixed pipelines. The agent autonomously explores the graph schema, generates and executes Cypher queries, inspects results, and refines its approach until it finds the answer. Supports "thinking models" (e.g., GPT-5.2, o3) for complex reasoning.
+
+**Key features:**
+- **Agentic loop**: Autonomous exploration with planning and reflection
+- **Schema-aware**: Agent reads and understands the graph schema before querying
+- **Multi-strategy**: Can try different query approaches if initial attempts fail
+- **Thinking model support**: Optimized for reasoning-focused models
+- **Direct Neo4j tools**: Uses native driver calls (mirroring MCP functionality)
+
+**Configuration** (in `.env`):
+```bash
+AGENTIC_TEXT2CYPHER_MODEL=gpt-5.2    # or o3, gpt-4.1
+AGENTIC_TEXT2CYPHER_PROVIDER=openai
+AGENTIC_TEXT2CYPHER_MAX_ITERATIONS=15
+```
 
 ## 📈 RAGAS Evaluation Framework
 
@@ -335,66 +361,69 @@ python tests/test_ragas_setup.py    # All approaches validation
 
 ## Cheatsheet
 
+### Benchmark Commands
+
 ```bash
-# Quick benchmark with default CSV
-python benchmark/ragas_benchmark.py --hybrid-cypher --chroma --graphrag --limit 5
+# Quick test
+python -m benchmark micro --hotpotqa --agentic-text2cypher
+
+# Development (10 questions)
+python -m benchmark mini --hotpotqa --chroma --graphrag
+
+# Standard test (50 questions)
+python -m benchmark smoke --hotpotqa --agentic-text2cypher
+
+# With RAGAS metrics
+python -m benchmark mini --ragas --agentic-text2cypher
+
+# Both metrics
+python -m benchmark mini --all-metrics --agentic-text2cypher
+
+# Build database first
+python -m benchmark smoke --hotpotqa --graphrag --build-database
 ```
 
-#### **HotpotQA Benchmark**
+### Presets
 
-| Preset | Questions | Articles | Default Retrievers | Needs Communities? |
-|--------|-----------|----------|-------------------|-------------------|
-| `micro` | 1 | ~2 | chroma | No |
-| `mini` | 10 | ~20 | chroma | No |
-| `mini_smoke` | 25 | ~50 | chroma, graphrag | No |
-| `smoke` | 50 | ~100 | chroma, graphrag | No |
-| `dev` | 500 | ~1000 | chroma, graphrag, hybrid_cypher, advanced_graphrag | Yes* |
-| `full` | ~7400 | ~10000 | all | Yes* |
+| Preset | Questions | Use Case |
+|--------|-----------|----------|
+| `micro` | 1 | Sanity check |
+| `mini` | 10 | Development |
+| `smoke` | 50 | Standard test |
+| `dev` | 200 | Thorough test |
+| `full` | ~7400 | Complete benchmark |
 
-*`advanced_graphrag` and `drift_graphrag` require community detection. Use `--skip-advanced` if you don't need these. 
+### Metrics
 
-**Test Only (default - uses existing graph data):**
+| Flag | Metrics | Speed |
+|------|---------|-------|
+| `--hotpotqa` | Exact Match + F1 | Fast |
+| `--ragas` | Response Relevancy, Factual Correctness, Semantic Similarity | Slow |
+| `--all-metrics` | Both | Slowest |
+
+### Retrievers
+
+| Flag | Approach |
+|------|----------|
+| `--chroma` | ChromaDB vector search |
+| `--graphrag` | Multi-hop graph traversal |
+| `--agentic-text2cypher` | Deep Agent-powered exploration |
+| `--text2cypher` | Natural language to Cypher |
+| `--neo4j-vector` | Neo4j vector similarity |
+| `--hybrid-cypher` | Combined vector + graph |
+| `--advanced-graphrag` | Community-enhanced |
+| `--drift-graphrag` | Iterative refinement |
+
+### Options
+
+| Flag | Effect |
+|------|--------|
+| `--build-database` | Clear Neo4j + ingest Wikipedia |
+| `--skip-advanced` | Skip community detection |
+| `--dataset pdfs` | Use PDF documents instead |
+
+### Help
+
 ```bash
-# Tests retrievers against existing Neo4j data (no database changes)
-python -m benchmark.hotpotqa.benchmark_pipeline mini
-python -m benchmark.hotpotqa.benchmark_pipeline smoke
-python -m benchmark.hotpotqa.benchmark_pipeline mini --retrievers graphrag neo4j_vector
-```
-
-**Build Database (downloads Wikipedia + clears DB + ingests + tests):**
-```bash
-# !!! CLEARS Neo4j, ingests Wikipedia articles, then tests retrievers
-# Includes community detection + element summarization (for advanced_graphrag, drift_graphrag)
-python -m benchmark.hotpotqa.benchmark_pipeline mini --build-database
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --retrievers graphrag neo4j_vector
-```
-
-**Build Database WITHOUT Advanced Processing (faster):**
-```bash
-# Skip community detection + summarization - faster build, basic retrievers only
-python -m benchmark.hotpotqa.benchmark_pipeline mini --build-database --skip-advanced
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --skip-advanced
-```
-
-| Flag | Effect | Use When |
-|------|--------|----------|
-| `--build-database` | Full build with communities | Need `advanced_graphrag` or `drift_graphrag` |
-| `--build-database --skip-advanced` | Basic build, no communities | Only need `graphrag`, `neo4j_vector`, `hybrid_cypher` |
-
-**Recommended workflow:**
-```bash
-# 1. Build database once with desired preset size
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
-
-# 2. Run multiple tests against the same data (fast iteration)
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers graphrag
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers neo4j_vector hybrid_cypher
-python -m benchmark.hotpotqa.benchmark_pipeline smoke --retrievers chroma graphrag neo4j_vector
-```
-
-**Utilities:**
-```bash
-# List all available presets
-python -m benchmark.hotpotqa.benchmark_pipeline --list-presets
+python -m benchmark --help
 ```

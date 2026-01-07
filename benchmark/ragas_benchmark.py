@@ -57,6 +57,7 @@ try:
         query_advanced_graphrag,
         query_drift_graphrag,
         query_text2cypher_rag,
+        query_agentic_text2cypher_rag,
         query_neo4j_vector_rag,
         query_hybrid_cypher_rag,
         get_available_retrievers,
@@ -68,11 +69,12 @@ try:
     
     CHROMA_AVAILABLE = 'chroma' in available_retrievers
     GRAPHRAG_AVAILABLE = 'graphrag' in available_retrievers
-    ADVANCED_GRAPHRAG_AVAILABLE = 'advanced_graphrag' in available_retrievers
-    DRIFT_GRAPHRAG_AVAILABLE = 'drift_graphrag' in available_retrievers
+    ADVANCED_GRAPHRAG_AVAILABLE = 'advanced-graphrag' in available_retrievers
+    DRIFT_GRAPHRAG_AVAILABLE = 'drift-graphrag' in available_retrievers
     TEXT2CYPHER_AVAILABLE = 'text2cypher' in available_retrievers
-    NEO4J_VECTOR_AVAILABLE = 'neo4j_vector' in available_retrievers
-    HYBRID_CYPHER_AVAILABLE = 'hybrid_cypher' in available_retrievers
+    AGENTIC_TEXT2CYPHER_AVAILABLE = 'agentic-text2cypher' in available_retrievers
+    NEO4J_VECTOR_AVAILABLE = 'neo4j-vector' in available_retrievers
+    HYBRID_CYPHER_AVAILABLE = 'hybrid-cypher' in available_retrievers
     
     print("OK Retrievers module imported successfully")
     print(f"Available retrievers: {list(available_retrievers.keys())}")
@@ -89,7 +91,9 @@ except ImportError as e:
     ADVANCED_GRAPHRAG_AVAILABLE = False
     DRIFT_GRAPHRAG_AVAILABLE = False
     TEXT2CYPHER_AVAILABLE = False
+    AGENTIC_TEXT2CYPHER_AVAILABLE = False
     NEO4J_VECTOR_AVAILABLE = False
+    HYBRID_CYPHER_AVAILABLE = False
 
 # Import centralized model configuration
 try:
@@ -188,15 +192,18 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                 result = query_graphrag(query, k=5)
             elif approach == "text2cypher" and TEXT2CYPHER_AVAILABLE:
                 result = query_text2cypher_rag(query)
-            elif approach == "advanced_graphrag" and ADVANCED_GRAPHRAG_AVAILABLE:
+            elif approach == "advanced-graphrag" and ADVANCED_GRAPHRAG_AVAILABLE:
                 result = query_advanced_graphrag(query, mode="hybrid", k=5)
-            elif approach == "drift_graphrag" and DRIFT_GRAPHRAG_AVAILABLE:
+            elif approach == "drift-graphrag" and DRIFT_GRAPHRAG_AVAILABLE:
                 result = query_drift_graphrag(query, n_depth=3, max_follow_ups=3, use_modular=True)
-            elif approach == "neo4j_vector" and NEO4J_VECTOR_AVAILABLE:
+            elif approach == "neo4j-vector" and NEO4J_VECTOR_AVAILABLE:
                 result = query_neo4j_vector_rag(query, k=5)
-            elif approach == "hybrid_cypher" and HYBRID_CYPHER_AVAILABLE:
+            elif approach == "hybrid-cypher" and HYBRID_CYPHER_AVAILABLE:
                 # Use the main hybrid cypher function with reduced k for benchmark stability
                 result = query_hybrid_cypher_rag(query, k=5)
+            elif approach == "agentic-text2cypher" and AGENTIC_TEXT2CYPHER_AVAILABLE:
+                # Deep Agent-powered adaptive graph exploration
+                result = query_agentic_text2cypher_rag(query)
             else:
                 # Handle unavailable retrievers or unknown approaches
                 if approach == "chroma" and not CHROMA_AVAILABLE:
@@ -205,14 +212,16 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
                     raise ValueError(f"GraphRAG retriever not available")
                 elif approach == "text2cypher" and not TEXT2CYPHER_AVAILABLE:
                     raise ValueError(f"Text2Cypher retriever not available")
-                elif approach == "advanced_graphrag" and not ADVANCED_GRAPHRAG_AVAILABLE:
+                elif approach == "advanced-graphrag" and not ADVANCED_GRAPHRAG_AVAILABLE:
                     raise ValueError(f"Advanced GraphRAG retriever not available")
-                elif approach == "drift_graphrag" and not DRIFT_GRAPHRAG_AVAILABLE:
+                elif approach == "drift-graphrag" and not DRIFT_GRAPHRAG_AVAILABLE:
                     raise ValueError(f"DRIFT GraphRAG retriever not available")
-                elif approach == "neo4j_vector" and not NEO4J_VECTOR_AVAILABLE:
+                elif approach == "neo4j-vector" and not NEO4J_VECTOR_AVAILABLE:
                     raise ValueError(f"Neo4j Vector retriever not available")
-                elif approach == "hybrid_cypher" and not HYBRID_CYPHER_AVAILABLE:
+                elif approach == "hybrid-cypher" and not HYBRID_CYPHER_AVAILABLE:
                     raise ValueError(f"Hybrid Cypher retriever not available")
+                elif approach == "agentic-text2cypher" and not AGENTIC_TEXT2CYPHER_AVAILABLE:
+                    raise ValueError(f"Agentic Text2Cypher retriever not available (requires deepagents package)")
                 else:
                     raise ValueError(f"Unknown approach: {approach}")
             
@@ -816,10 +825,11 @@ def create_detailed_reports(datasets: Dict, results: Dict, approaches: List[str]
             'chroma': 'ChromaDB RAG',
             'graphrag': 'GraphRAG', 
             'text2cypher': 'Text2Cypher',
-            'advanced_graphrag': 'Advanced GraphRAG',
-            'drift_graphrag': 'DRIFT GraphRAG',
-            'neo4j_vector': 'Neo4j Vector RAG',
-            'hybrid_cypher': 'Hybrid Cypher RAG'
+            'agentic-text2cypher': 'Agentic Text2Cypher',
+            'advanced-graphrag': 'Advanced GraphRAG',
+            'drift-graphrag': 'DRIFT GraphRAG',
+            'neo4j-vector': 'Neo4j Vector RAG',
+            'hybrid-cypher': 'Hybrid Cypher RAG'
         }
         
         # We need to correlate questions across approaches to group them properly
@@ -946,6 +956,11 @@ Examples:
         help='Include Hybrid Cypher RAG (hybrid + generic neighborhood) in testing'
     )
     parser.add_argument(
+        '--agentic-text2cypher', 
+        action='store_true',
+        help='Include Agentic Text2Cypher (Deep Agent-powered graph exploration) in testing'
+    )
+    parser.add_argument(
         '--output-dir',
         default='benchmark_outputs',
         help='Output directory for results (default: benchmark_outputs)'
@@ -966,18 +981,20 @@ Examples:
     
     args = parser.parse_args()
     
-    # Determine which approaches to test
+    # Determine which approaches to test (use hyphens for consistency)
     approaches = []
     if args.all:
         base_approaches = ['chroma', 'graphrag', 'text2cypher']
         if ADVANCED_GRAPHRAG_AVAILABLE:
-            base_approaches.append('advanced_graphrag')
+            base_approaches.append('advanced-graphrag')
         if DRIFT_GRAPHRAG_AVAILABLE:
-            base_approaches.append('drift_graphrag')
+            base_approaches.append('drift-graphrag')
         if NEO4J_VECTOR_AVAILABLE:
-            base_approaches.append('neo4j_vector')
+            base_approaches.append('neo4j-vector')
         if HYBRID_CYPHER_AVAILABLE:
-            base_approaches.append('hybrid_cypher')
+            base_approaches.append('hybrid-cypher')
+        if AGENTIC_TEXT2CYPHER_AVAILABLE:
+            base_approaches.append('agentic-text2cypher')
         approaches = base_approaches
     else:
         if args.chroma:
@@ -987,26 +1004,30 @@ Examples:
         if args.text2cypher:
             approaches.append('text2cypher')
         if getattr(args, 'advanced_graphrag', False) and ADVANCED_GRAPHRAG_AVAILABLE:
-            approaches.append('advanced_graphrag')
+            approaches.append('advanced-graphrag')
         if getattr(args, 'drift_graphrag', False) and DRIFT_GRAPHRAG_AVAILABLE:
-            approaches.append('drift_graphrag')
+            approaches.append('drift-graphrag')
         if getattr(args, 'neo4j_vector', False) and NEO4J_VECTOR_AVAILABLE:
-            approaches.append('neo4j_vector')
+            approaches.append('neo4j-vector')
         if getattr(args, 'hybrid_cypher', False) and HYBRID_CYPHER_AVAILABLE:
-            approaches.append('hybrid_cypher')
+            approaches.append('hybrid-cypher')
+        if getattr(args, 'agentic_text2cypher', False) and AGENTIC_TEXT2CYPHER_AVAILABLE:
+            approaches.append('agentic-text2cypher')
     
     # If no approaches specified, default to all
     if not approaches:
         print("WARNING: No approaches specified. Defaulting to all available approaches.")
         default_approaches = ['chroma', 'graphrag', 'text2cypher']
         if ADVANCED_GRAPHRAG_AVAILABLE:
-            default_approaches.append('advanced_graphrag')
+            default_approaches.append('advanced-graphrag')
         if DRIFT_GRAPHRAG_AVAILABLE:
-            default_approaches.append('drift_graphrag')
+            default_approaches.append('drift-graphrag')
         if NEO4J_VECTOR_AVAILABLE:
-            default_approaches.append('neo4j_vector')
+            default_approaches.append('neo4j-vector')
         if HYBRID_CYPHER_AVAILABLE:
-            default_approaches.append('hybrid_cypher')
+            default_approaches.append('hybrid-cypher')
+        if AGENTIC_TEXT2CYPHER_AVAILABLE:
+            default_approaches.append('agentic-text2cypher')
         approaches = default_approaches
     
     return approaches, args.output_dir, args.csv, args.jsonl, args.limit
@@ -1019,10 +1040,11 @@ def main_selective(approaches: List[str], output_dir: str = "benchmark_outputs",
         'chroma': 'ChromaDB RAG',
         'graphrag': 'GraphRAG', 
         'text2cypher': 'Text2Cypher',
-        'advanced_graphrag': 'Advanced GraphRAG',
-        'drift_graphrag': 'DRIFT GraphRAG',
-        'neo4j_vector': 'Neo4j Vector RAG',
-        'hybrid_cypher': 'Hybrid Cypher RAG'
+        'agentic-text2cypher': 'Agentic Text2Cypher',
+        'advanced-graphrag': 'Advanced GraphRAG',
+        'drift-graphrag': 'DRIFT GraphRAG',
+        'neo4j-vector': 'Neo4j Vector RAG',
+        'hybrid-cypher': 'Hybrid Cypher RAG'
     }
     
     selected_names = [approach_names[approach] for approach in approaches]

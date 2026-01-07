@@ -13,6 +13,8 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
+import pandas as pd
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -28,25 +30,28 @@ def run_hotpotqa_benchmark(
     build_database: bool = False,
     run_advanced: bool = True,
     output_dir: str = "benchmark_outputs/hotpotqa",
-    cache_dir: str = "data/hotpotqa"
+    cache_dir: str = "data/hotpotqa",
+    include_ragas: bool = False
 ) -> Dict[str, Any]:
     """
-    Run complete HotpotQA benchmark with RAGAS evaluation.
+    Run complete HotpotQA benchmark with native EM/F1 evaluation.
     
     Pipeline steps:
     1. Download HotpotQA questions + Wikipedia articles
     2. Ingest articles into Neo4j (only if build_database=True)
     3. Run each retriever on all questions
-    4. Evaluate with RAGAS metrics
-    5. Generate comparison report
+    4. Evaluate with HotpotQA metrics (EM/F1)
+    5. Optionally evaluate with RAGAS metrics (if --ragas flag)
+    6. Generate comparison report
     
     Args:
         preset: Benchmark preset (smoke, dev, full, mini)
         retrievers: List of retrievers to test (overrides preset)
         build_database: If True, clear Neo4j and ingest Wikipedia articles
         run_advanced: If True, run advanced processing (community detection + summarization)
-        output_dir: Directory for benchmark outputs
+        output_dir: Base directory for benchmark outputs (timestamped folder will be created inside)
         cache_dir: Directory for caching downloaded data
+        include_ragas: If True, also run RAGAS metrics (slower, LLM-based evaluation)
         
     Returns:
         Complete benchmark results dictionary
@@ -54,6 +59,7 @@ def run_hotpotqa_benchmark(
     from .configs import get_preset_config, print_preset_info
     from .data_loader import prepare_corpus, load_cached_corpus, save_corpus
     from .wiki_ingester import WikiCorpusIngester
+    from .metrics import evaluate_retriever_hotpotqa
     
     # Import RAGAS benchmark utilities
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -73,13 +79,19 @@ def run_hotpotqa_benchmark(
     if retrievers:
         config["retrievers"] = retrievers
     
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
+    # Create timestamped output directory for this run
+    run_timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    run_output_dir = os.path.join(output_dir, run_timestamp)
+    os.makedirs(run_output_dir, exist_ok=True)
+    
+    print(f"\n📁 Results will be saved to: {run_output_dir}/")
     
     results = {
         "preset": preset,
         "config": config,
         "start_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "run_timestamp": run_timestamp,
+        "output_directory": run_output_dir,
         "phases": {}
     }
     
@@ -230,10 +242,11 @@ def run_hotpotqa_benchmark(
     print(f"\n[PHASE 3 COMPLETE] Evaluated {len(datasets)} retrievers")
     
     # =========================================================================
-    # PHASE 4: RAGAS EVALUATION
+    # PHASE 4: EVALUATION
     # =========================================================================
     print("\n" + "="*70)
-    print("PHASE 4: RAGAS EVALUATION")
+    metrics_label = "HotpotQA Metrics" + (" + RAGAS" if include_ragas else "")
+    print(f"PHASE 4: EVALUATION ({metrics_label})")
     print("="*70)
     
     phase4_start = time.time()
@@ -242,36 +255,65 @@ def run_hotpotqa_benchmark(
         'chroma': 'ChromaDB RAG',
         'graphrag': 'GraphRAG',
         'text2cypher': 'Text2Cypher',
-        'advanced_graphrag': 'Advanced GraphRAG',
-        'drift_graphrag': 'DRIFT GraphRAG',
-        'neo4j_vector': 'Neo4j Vector RAG',
-        'hybrid_cypher': 'Hybrid Cypher RAG'
+        'agentic-text2cypher': 'Agentic Text2Cypher',
+        'advanced-graphrag': 'Advanced GraphRAG',
+        'drift-graphrag': 'DRIFT GraphRAG',
+        'neo4j-vector': 'Neo4j Vector RAG',
+        'hybrid-cypher': 'Hybrid Cypher RAG'
     }
     
-    ragas_results = {}
+    # ---- HotpotQA Native Metrics (EM/F1) - Always run ----
+    print("\n[HOTPOTQA] Computing native metrics (Exact Match / F1)...")
+    hotpotqa_results = {}
     for retriever in config["retrievers"]:
         if datasets.get(retriever):
-            print(f"\n[RAGAS] Evaluating {retriever}...")
             try:
-                ragas_results[retriever] = evaluate_with_ragas_simple(
+                hotpotqa_results[retriever] = evaluate_retriever_hotpotqa(
                     datasets[retriever],
                     approach_names.get(retriever, retriever)
                 )
             except Exception as e:
-                print(f"[ERROR] RAGAS evaluation failed for {retriever}: {e}")
-                ragas_results[retriever] = {
-                    "response_relevancy": 0.0,
-                    "factual_correctness": 0.0,
-                    "semantic_similarity": 0.0,
+                print(f"[ERROR] HotpotQA evaluation failed for {retriever}: {e}")
+                hotpotqa_results[retriever] = {
+                    "exact_match": 0.0,
+                    "f1": 0.0,
                     "error": str(e)
                 }
     
-    results["phases"]["ragas_evaluation"] = {
-        "results": ragas_results,
+    results["phases"]["hotpotqa_evaluation"] = {
+        "results": hotpotqa_results,
         "duration_seconds": time.time() - phase4_start
     }
     
-    print(f"\n[PHASE 4 COMPLETE] RAGAS evaluation done")
+    # ---- RAGAS Metrics (Optional) ----
+    ragas_results = {}
+    if include_ragas:
+        print("\n[RAGAS] Computing RAGAS metrics (--ragas flag enabled)...")
+        for retriever in config["retrievers"]:
+            if datasets.get(retriever):
+                print(f"\n[RAGAS] Evaluating {retriever}...")
+                try:
+                    ragas_results[retriever] = evaluate_with_ragas_simple(
+                        datasets[retriever],
+                        approach_names.get(retriever, retriever)
+                    )
+                except Exception as e:
+                    print(f"[ERROR] RAGAS evaluation failed for {retriever}: {e}")
+                    ragas_results[retriever] = {
+                        "response_relevancy": 0.0,
+                        "factual_correctness": 0.0,
+                        "semantic_similarity": 0.0,
+                        "error": str(e)
+                    }
+        
+        results["phases"]["ragas_evaluation"] = {
+            "results": ragas_results,
+            "duration_seconds": time.time() - phase4_start - results["phases"]["hotpotqa_evaluation"]["duration_seconds"]
+        }
+    else:
+        print("\n[INFO] RAGAS metrics skipped (use --ragas to enable)")
+    
+    print(f"\n[PHASE 4 COMPLETE] Evaluation done")
     
     # =========================================================================
     # PHASE 5: REPORTING
@@ -282,58 +324,127 @@ def run_hotpotqa_benchmark(
     
     phase5_start = time.time()
     
-    # Create comparison table
-    comparison_table = create_multi_approach_comparison_table(
-        ragas_results, 
-        approach_names
-    )
-    
-    # Print results
+    # ---- Print HotpotQA Results First (Primary Metrics) ----
     print("\n" + "="*80)
-    print("HOTPOTQA BENCHMARK RESULTS")
+    print("HOTPOTQA NATIVE METRICS (EM / F1)")
     print("="*80)
-    print(comparison_table.to_string(index=False))
     
-    # Calculate overall scores
-    print("\n OVERALL PERFORMANCE:")
-    print("-"*50)
+    # Build HotpotQA metrics table
+    hotpot_rows = []
+    for retriever in config["retrievers"]:
+        if retriever in hotpotqa_results:
+            hotpot_rows.append({
+                "Retriever": approach_names.get(retriever, retriever),
+                "Exact Match": hotpotqa_results[retriever].get("exact_match", 0.0),
+                "F1 Score": hotpotqa_results[retriever].get("f1", 0.0)
+            })
+    
+    if hotpot_rows:
+        hotpot_df = pd.DataFrame(hotpot_rows)
+        print(hotpot_df.to_string(index=False))
+        
+        # Print best performer for HotpotQA metrics
+        print("\n HOTPOTQA PERFORMANCE:")
+        print("-"*50)
+        best_em = max(hotpot_rows, key=lambda x: x["Exact Match"])
+        best_f1 = max(hotpot_rows, key=lambda x: x["F1 Score"])
+        print(f"   Best EM:  {best_em['Retriever']} ({best_em['Exact Match']:.4f})")
+        print(f"   Best F1:  {best_f1['Retriever']} ({best_f1['F1 Score']:.4f})")
+    
+    # ---- Print RAGAS Results (only if enabled) ----
+    comparison_table = None
     averages = {}
-    for col in comparison_table.columns:
-        if col != 'Metric':
-            try:
-                avg = comparison_table[col].mean()
-                averages[col] = avg
-                print(f"   {col}: {avg:.4f}")
-            except:
-                pass
     
-    if averages:
-        winner = max(averages, key=averages.get)
-        print(f"\n   Best Overall: {winner} ({averages[winner]:.4f})")
+    if include_ragas and ragas_results:
+        print("\n" + "="*80)
+        print("RAGAS METRICS")
+        print("="*80)
+        
+        # Create comparison table
+        comparison_table = create_multi_approach_comparison_table(
+            ragas_results, 
+            approach_names
+        )
+        print(comparison_table.to_string(index=False))
+        
+        # Calculate overall scores
+        print("\n RAGAS AVERAGE PERFORMANCE:")
+        print("-"*50)
+        for col in comparison_table.columns:
+            if col != 'Metric':
+                try:
+                    avg = comparison_table[col].mean()
+                    averages[col] = avg
+                    print(f"   {col}: {avg:.4f}")
+                except:
+                    pass
+        
+        if averages:
+            winner = max(averages, key=averages.get)
+            print(f"\n   Best RAGAS Average: {winner} ({averages[winner]:.4f})")
+        
+        # Save RAGAS results
+        save_results_selective(
+            datasets=datasets,
+            results=ragas_results,
+            comparison_table=comparison_table,
+            approaches=config["retrievers"],
+            output_dir=run_output_dir
+        )
     
     # Flush stdout to prevent duplicate output on Windows
     sys.stdout.flush()
     
-    # Save results
-    save_results_selective(
-        datasets=datasets,
-        results=ragas_results,
-        comparison_table=comparison_table,
-        approaches=config["retrievers"],
-        output_dir=output_dir
-    )
+    # Save HotpotQA metrics
+    hotpotqa_results_file = os.path.join(run_output_dir, "hotpotqa_metrics.json")
+    with open(hotpotqa_results_file, 'w', encoding='utf-8') as f:
+        json.dump({
+            "metrics_type": "hotpotqa_native",
+            "description": "HotpotQA official evaluation metrics (Exact Match and F1)",
+            "results": hotpotqa_results
+        }, f, indent=2)
+    print(f"  - hotpotqa_metrics.json")
+    
+    # Save results CSV
+    result_rows = []
+    for retriever in config["retrievers"]:
+        row = {
+            "retriever": approach_names.get(retriever, retriever),
+            "exact_match": hotpotqa_results.get(retriever, {}).get("exact_match", 0.0),
+            "f1": hotpotqa_results.get(retriever, {}).get("f1", 0.0),
+        }
+        # Add RAGAS metrics only if enabled
+        if include_ragas:
+            row["response_relevancy"] = ragas_results.get(retriever, {}).get("response_relevancy", 0.0)
+            row["factual_correctness"] = ragas_results.get(retriever, {}).get("factual_correctness", 0.0)
+            row["semantic_similarity"] = ragas_results.get(retriever, {}).get("semantic_similarity", 0.0)
+        result_rows.append(row)
+    
+    if result_rows:
+        results_df = pd.DataFrame(result_rows)
+        results_csv = os.path.join(run_output_dir, "benchmark_results.csv")
+        results_df.to_csv(results_csv, index=False)
+        print(f"  - benchmark_results.csv")
     
     # Create visualizations
     try:
-        create_visualizations(comparison_table, output_dir=output_dir)
+        from .visualizations import create_hotpotqa_visualizations
+        create_hotpotqa_visualizations(
+            hotpotqa_results=hotpotqa_results,
+            approach_names=approach_names,
+            output_dir=run_output_dir,
+            ragas_results=ragas_results if include_ragas else None
+        )
     except Exception as e:
         print(f"[WARN] Visualization creation failed: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Save comprehensive results JSON
     results["phases"]["reporting"] = {
-        "comparison_table": comparison_table.to_dict(),
-        "averages": averages,
-        "winner": winner if averages else None,
+        "hotpotqa_results": hotpotqa_results,
+        "ragas_comparison_table": comparison_table.to_dict() if comparison_table is not None else None,
+        "ragas_averages": averages if averages else None,
         "duration_seconds": time.time() - phase5_start
     }
     
@@ -343,7 +454,7 @@ def run_hotpotqa_benchmark(
     )
     
     # Save full results
-    results_file = os.path.join(output_dir, "hotpotqa_benchmark_results.json")
+    results_file = os.path.join(run_output_dir, "hotpotqa_benchmark_results.json")
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, default=str)
     
@@ -351,7 +462,7 @@ def run_hotpotqa_benchmark(
     print("BENCHMARK COMPLETE!")
     print(f"{'='*70}")
     print(f"   Total duration: {results['total_duration_seconds']:.1f} seconds")
-    print(f"   Results saved to: {output_dir}/")
+    print(f"   Results saved to: {run_output_dir}/")
     print(f"{'='*70}\n")
     
     return results
@@ -364,23 +475,28 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Test retrievers against existing graph (default - no database changes)
-  python -m benchmark.hotpotqa.benchmark_pipeline smoke
-  python -m benchmark.hotpotqa.benchmark_pipeline mini --retrievers graphrag neo4j_vector
+  # Quick test with HotpotQA metrics (EM/F1) - default
+  python -m benchmark.hotpotqa.benchmark_pipeline micro --agentic-text2cypher
+  
+  # Mini benchmark (10 questions)
+  python -m benchmark.hotpotqa.benchmark_pipeline mini --graphrag --neo4j-vector
+
+  # Include RAGAS metrics (slower, LLM-based)
+  python -m benchmark.hotpotqa.benchmark_pipeline mini --agentic-text2cypher --ragas
 
   # Build database first, then test (CLEARS existing Neo4j data!)
-  python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database
-  python -m benchmark.hotpotqa.benchmark_pipeline dev --build-database --retrievers chroma graphrag
-
-  # Build database WITHOUT community detection (faster, basic retrievers only)
-  python -m benchmark.hotpotqa.benchmark_pipeline mini --build-database --skip-advanced
+  python -m benchmark.hotpotqa.benchmark_pipeline smoke --build-database --chroma
 
   # Full evaluation (all ~7400 questions)
   python -m benchmark.hotpotqa.benchmark_pipeline full --build-database
 
-Note: Questions are from HotpotQA dataset. For best results, use --build-database 
-      first to ingest the corresponding Wikipedia articles, then run tests without it.
-      Use --skip-advanced to skip community detection if you only need basic retrievers.
+Metrics:
+  Default: HotpotQA native metrics (Exact Match + F1) - fast, deterministic
+  --ragas: Also include RAGAS metrics (Response Relevancy, Factual Correctness, 
+           Semantic Similarity) - slower, uses LLM for evaluation
+
+Note: HotpotQA uses short factoid answers. EM/F1 metrics are recommended.
+      Use --ragas only if you need LLM-based semantic evaluation.
         """
     )
     
@@ -392,10 +508,46 @@ Note: Questions are from HotpotQA dataset. For best results, use --build-databas
         help="Benchmark preset (default: smoke)"
     )
     
+    # Individual retriever flags (consistent with ragas_benchmark.py)
     parser.add_argument(
-        "--retrievers",
-        nargs="+",
-        help="Specific retrievers to test (overrides preset)"
+        "--chroma",
+        action="store_true",
+        help="Include ChromaDB RAG in testing"
+    )
+    parser.add_argument(
+        "--graphrag",
+        action="store_true",
+        help="Include GraphRAG in testing"
+    )
+    parser.add_argument(
+        "--text2cypher",
+        action="store_true",
+        help="Include Text2Cypher in testing"
+    )
+    parser.add_argument(
+        "--advanced-graphrag",
+        action="store_true",
+        help="Include Advanced GraphRAG (intelligent global/local/hybrid) in testing"
+    )
+    parser.add_argument(
+        "--drift-graphrag",
+        action="store_true",
+        help="Include DRIFT GraphRAG (iterative refinement) in testing"
+    )
+    parser.add_argument(
+        "--neo4j-vector",
+        action="store_true",
+        help="Include Neo4j Vector RAG (pure vector similarity) in testing"
+    )
+    parser.add_argument(
+        "--hybrid-cypher",
+        action="store_true",
+        help="Include Hybrid Cypher RAG (hybrid + generic neighborhood) in testing"
+    )
+    parser.add_argument(
+        "--agentic-text2cypher",
+        action="store_true",
+        help="Include Agentic Text2Cypher (Deep Agent-powered graph exploration) in testing"
     )
     
     parser.add_argument(
@@ -423,6 +575,12 @@ Note: Questions are from HotpotQA dataset. For best results, use --build-databas
     )
     
     parser.add_argument(
+        "--ragas",
+        action="store_true",
+        help="Also run RAGAS metrics (slower, LLM-based evaluation)"
+    )
+    
+    parser.add_argument(
         "--list-presets",
         action="store_true",
         help="List available presets and exit"
@@ -435,14 +593,38 @@ Note: Questions are from HotpotQA dataset. For best results, use --build-databas
         list_presets()
         return
     
+    # Build retrievers list from individual flags
+    retrievers = []
+    if args.chroma:
+        retrievers.append('chroma')
+    if args.graphrag:
+        retrievers.append('graphrag')
+    if args.text2cypher:
+        retrievers.append('text2cypher')
+    if getattr(args, 'advanced_graphrag', False):
+        retrievers.append('advanced-graphrag')
+    if getattr(args, 'drift_graphrag', False):
+        retrievers.append('drift-graphrag')
+    if getattr(args, 'neo4j_vector', False):
+        retrievers.append('neo4j-vector')
+    if getattr(args, 'hybrid_cypher', False):
+        retrievers.append('hybrid-cypher')
+    if getattr(args, 'agentic_text2cypher', False):
+        retrievers.append('agentic-text2cypher')
+    
+    # If no retrievers specified, use preset defaults (None lets run_hotpotqa_benchmark use preset config)
+    if not retrievers:
+        retrievers = None
+    
     # Run benchmark
     results = run_hotpotqa_benchmark(
         preset=args.preset,
-        retrievers=args.retrievers,
+        retrievers=retrievers,
         build_database=args.build_database,
         run_advanced=not args.skip_advanced,
         output_dir=args.output_dir,
-        cache_dir=args.cache_dir
+        cache_dir=args.cache_dir,
+        include_ragas=args.ragas
     )
     
     return results

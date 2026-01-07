@@ -16,7 +16,24 @@ Each retriever can be imported directly or accessed through the universal interf
 try:
     from .chroma_retriever import query_chroma_rag, create_chroma_retriever, ChromaRetriever
     from .graph_rag_retriever import query_graphrag, create_graphrag_retriever, GraphRAGRetriever 
-    from .text2cypher_retriever import query_text2cypher_rag, create_text2cypher_retriever, Text2CypherRAGRetriever
+    from .text2cypher_retriever import (
+        query_text2cypher_rag, 
+        create_text2cypher_retriever, 
+        Text2CypherRAGRetriever,
+        # Cypher verification classes (inlined in text2cypher_retriever)
+        CypherVerificationPipeline,
+        SyntaxVerifier,
+        ExecutionVerifier,
+        LLMVerifier,
+        VerificationResult,
+        create_verification_pipeline,
+        # Cypher correction classes (inlined in text2cypher_retriever)
+        CypherCorrectionPipeline,
+        RuleBasedCorrector,
+        LLMCorrector,
+        CorrectionResult,
+        create_correction_pipeline
+    )
     try:
         from .hybrid_cypher_retriever import (
             query_hybrid_cypher_rag,
@@ -69,10 +86,24 @@ except ImportError as e:
     query_drift_graphrag = None
     query_text2cypher_rag = None
     query_neo4j_vector_rag = None
+    query_hybrid_cypher_rag = None
     ADVANCED_GRAPHRAG_AVAILABLE = False
     DRIFT_GRAPHRAG_AVAILABLE = False
+    # Agentic and tools will be tried separately below
+    AGENTIC_TEXT2CYPHER_AVAILABLE = False
+    query_agentic_text2cypher_rag = None
+    create_agentic_text2cypher_retriever = None
+    AgenticText2CypherRetriever = None
+    # Neo4j Agent Tools fallbacks
+    Neo4jAgentTools = None
+    neo4j_get_schema = None
+    neo4j_read_cypher = None
+    neo4j_list_gds = None
+    AGENT_TOOLS = []
+    AGENT_TOOLS_MINIMAL = []
 
 # Central registry of all available retrievers
+# Keys use hyphens for CLI consistency (e.g., --retrievers advanced-graphrag)
 AVAILABLE_RETRIEVERS = {
     'chroma': {
         'function': query_chroma_rag,
@@ -86,13 +117,13 @@ AVAILABLE_RETRIEVERS = {
         'description': 'Basic Neo4j graph-enhanced vector search',
         'available': query_graphrag is not None
     },
-    'advanced_graphrag': {
+    'advanced-graphrag': {
         'function': query_advanced_graphrag,
         'name': 'Advanced GraphRAG',
         'description': 'Intelligent global/local routing with community detection',
         'available': ADVANCED_GRAPHRAG_AVAILABLE
     },
-    'drift_graphrag': {
+    'drift-graphrag': {
         'function': query_drift_graphrag,
         'name': 'DRIFT GraphRAG',
         'description': 'Microsoft\'s iterative refinement with action graphs',
@@ -104,13 +135,13 @@ AVAILABLE_RETRIEVERS = {
         'description': 'Natural language to Cypher query translation',
         'available': query_text2cypher_rag is not None
     },
-    'neo4j_vector': {
+    'neo4j-vector': {
         'function': query_neo4j_vector_rag,
         'name': 'Neo4j Vector RAG',
         'description': 'Pure vector similarity search using Neo4j vector index',
         'available': query_neo4j_vector_rag is not None
     },
-    'hybrid_cypher': {
+    'hybrid-cypher': {
         'function': query_hybrid_cypher_rag,
         'name': 'Hybrid Cypher RAG',
         'description': 'Hybrid (vector + fulltext) with generic neighborhood expansion',
@@ -188,6 +219,44 @@ def test_all_retrievers(test_query: str = "What are the main requirements mentio
     return results
 
 
+# Agentic Text2Cypher (Deep Agent based) - imported from subpackage
+# Must be imported BEFORE __all__ and conditional checks that use AGENTIC_TEXT2CYPHER_AVAILABLE
+try:
+    from .agentic_text2cypher import (
+        query_agentic_text2cypher_rag,
+        create_agentic_text2cypher_retriever,
+        AgenticText2CypherRetriever,
+        Neo4jAgentTools,
+        neo4j_get_schema,
+        neo4j_read_cypher,
+        neo4j_list_gds,
+        AGENT_TOOLS,
+        AGENT_TOOLS_MINIMAL,
+        DEEP_AGENTS_AVAILABLE
+    )
+    AGENTIC_TEXT2CYPHER_AVAILABLE = DEEP_AGENTS_AVAILABLE
+    # Add to registry after successful import
+    if AGENTIC_TEXT2CYPHER_AVAILABLE:
+        AVAILABLE_RETRIEVERS['agentic-text2cypher'] = {
+            'function': query_agentic_text2cypher_rag,
+            'name': 'Agentic Text2Cypher RAG',
+            'description': 'Deep Agent-powered adaptive graph exploration',
+            'available': True
+        }
+except ImportError as e:
+    print(f"Agentic Text2Cypher not available: {e}")
+    AGENTIC_TEXT2CYPHER_AVAILABLE = False
+    DEEP_AGENTS_AVAILABLE = False
+    query_agentic_text2cypher_rag = None
+    create_agentic_text2cypher_retriever = None
+    AgenticText2CypherRetriever = None
+    Neo4jAgentTools = None
+    neo4j_get_schema = None
+    neo4j_read_cypher = None
+    neo4j_list_gds = None
+    AGENT_TOOLS = []
+    AGENT_TOOLS_MINIMAL = []
+
 # Export all main functions and classes
 __all__ = [
     # Main interface functions
@@ -196,12 +265,14 @@ __all__ = [
     'query_advanced_graphrag',
     'query_drift_graphrag',
     'query_text2cypher_rag',
+    'query_agentic_text2cypher_rag',
     'query_neo4j_vector_rag',
     
     # Factory functions
     'create_chroma_retriever',
     'create_graphrag_retriever',
     'create_text2cypher_retriever',
+    'create_agentic_text2cypher_retriever',
     'create_neo4j_vector_retriever',
     'create_advanced_graphrag_retriever',
     
@@ -209,8 +280,32 @@ __all__ = [
     'ChromaRetriever',
     'GraphRAGRetriever',
     'Text2CypherRAGRetriever',
+    'AgenticText2CypherRetriever',
     'Neo4jVectorRetriever',
     'HybridCypherRAGRetriever',
+    
+    # Neo4j Agent Tools
+    'Neo4jAgentTools',
+    'neo4j_get_schema',
+    'neo4j_read_cypher',
+    'neo4j_list_gds',
+    'AGENT_TOOLS',
+    'AGENT_TOOLS_MINIMAL',
+    
+    # Cypher verification classes
+    'CypherVerificationPipeline',
+    'SyntaxVerifier',
+    'ExecutionVerifier',
+    'LLMVerifier',
+    'VerificationResult',
+    'create_verification_pipeline',
+    
+    # Cypher correction classes
+    'CypherCorrectionPipeline',
+    'RuleBasedCorrector',
+    'LLMCorrector',
+    'CorrectionResult',
+    'create_correction_pipeline',
     
     # Utility functions
     'get_available_retrievers',
@@ -219,7 +314,11 @@ __all__ = [
     'test_all_retrievers',
     
     # Registry
-    'AVAILABLE_RETRIEVERS'
+    'AVAILABLE_RETRIEVERS',
+    
+    # Availability flags
+    'AGENTIC_TEXT2CYPHER_AVAILABLE',
+    'DEEP_AGENTS_AVAILABLE'
 ]
 
 # Conditional exports for advanced retrievers
@@ -228,5 +327,8 @@ if ADVANCED_GRAPHRAG_AVAILABLE:
 
 if DRIFT_GRAPHRAG_AVAILABLE:
     __all__.extend(['create_drift_retriever', 'DriftGraphRAGRetriever'])
+
+if AGENTIC_TEXT2CYPHER_AVAILABLE:
+    __all__.extend(['AgenticText2CypherRetriever'])
 
 print(f"Retrievers module loaded. Available approaches: {list(get_available_retrievers().keys())}") 

@@ -35,7 +35,7 @@ BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
     "dev": {
         "description": "Development benchmark for testing improvements",
         "question_limit": 500,
-        "retrievers": ["chroma", "graphrag", "hybrid_cypher", "advanced_graphrag"],
+        "retrievers": ["chroma", "graphrag", "hybrid-cypher", "advanced-graphrag"],
         "estimated_articles": 1000,
         "estimated_cost": "$20",
         "estimated_time_minutes": 60
@@ -58,15 +58,16 @@ BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
     }
 }
 
-# All available retrievers in the system
+# All available retrievers in the system (use hyphens for CLI consistency)
 ALL_RETRIEVERS = [
     "chroma",
     "graphrag",
-    "advanced_graphrag",
-    "drift_graphrag",
-    "hybrid_cypher",
-    "neo4j_vector",
-    "text2cypher"
+    "advanced-graphrag",
+    "drift-graphrag",
+    "hybrid-cypher",
+    "neo4j-vector",
+    "text2cypher",
+    "agentic-text2cypher"
 ]
 
 # Default cache directory for downloaded data

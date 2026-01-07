@@ -21,7 +21,10 @@ from .model_factory import (
     get_llm,
     get_embeddings,
     get_neo4j_llm,
-    get_neo4j_embeddings
+    get_neo4j_embeddings,
+    get_text2cypher_llm,
+    get_text2cypher_langchain_llm,
+    get_agentic_text2cypher_llm
 )
 
 __all__ = [
@@ -44,5 +47,8 @@ __all__ = [
     'get_llm',
     'get_embeddings',
     'get_neo4j_llm',
-    'get_neo4j_embeddings'
+    'get_neo4j_embeddings',
+    'get_text2cypher_llm',
+    'get_text2cypher_langchain_llm',
+    'get_agentic_text2cypher_llm'
 ]
