@@ -1122,60 +1122,160 @@ class GraphOperationsMixin:
     
     def perform_entity_resolution(self, similarity_threshold: float = 0.95, 
                                 word_edit_distance: int = 3, max_workers: int = 4):
-        """Perform comprehensive entity resolution across the graph."""
+        """Perform comprehensive entity resolution across the graph.
+        
+        Two-phase approach:
+        1. Exact name match (case-insensitive) - merge entities with same name but different types
+        2. LLM-based similarity detection - find entities that refer to the same thing
+        """
         print("[RESOLVE] Starting entity resolution...")
         logger.info(f"Starting entity resolution....")
         
+        total_merged = 0
+        
         with self.driver.session() as session:
-            # Get all entities #sd43372 changed from Entity to __Entity__, e.text to e.name
+            # ================================================================
+            # PHASE 1: Merge exact name duplicates (different types)
+            # ================================================================
+            print("[RESOLVE] Phase 1: Merging exact name duplicates across types...")
+            
+            # Find entities with same normalized name but different types
             result = session.run("""
                 MATCH (e:__Entity__)
-                RETURN e.id as id, e.name as text, e.entity_type as type
+                WITH toLower(trim(e.name)) as normalized_name, collect(e) as entities
+                WHERE size(entities) > 1
+                RETURN normalized_name, 
+                       [x IN entities | {id: x.id, name: x.name, type: x.entity_type, description: x.description}] as duplicates
             """)
             
-            entities_by_type = {}
-            for record in result:
-                entity_type = record['type']
-                if entity_type not in entities_by_type:
-                    entities_by_type[entity_type] = []
-                entities_by_type[entity_type].append({
-                    'id': record['id'],
-                    'text': record['text']
-                })
+            exact_duplicates = list(result)
+            print(f"[RESOLVE] Found {len(exact_duplicates)} entities with exact name duplicates")
             
-            total_merged = 0
+            for record in exact_duplicates:
+                duplicates = record['duplicates']
+                if len(duplicates) >= 2:
+                    # Merge preserving all type labels
+                    merged_count = self._merge_entities_preserve_all_types(session, duplicates)
+                    total_merged += merged_count
             
-            # Process each entity type separately
-            for entity_type, entities in entities_by_type.items():
-                if len(entities) < 2:
-                    continue
-                
-                print(f"[RESOLVE] Resolving {entity_type} entities ({len(entities)} entities)...")
-                logger.info(f"Resolving {entity_type} entities ({len(entities)} entities)...")
-                
-                # Use LLM for duplicate detection
-                entity_texts = [e['text'] for e in entities]
-                duplicates = self.entity_resolution(entity_texts)
-                logger.debug(f'Duplicates: {duplicates}')
-                
-                if duplicates:
-                    for duplicate_group in duplicates:
-                        logger.debug(f'Dup Grp: {duplicate_group}')
-                        if len(duplicate_group) >= 2:
-                            # Find entity IDs for this group
-                            entity_ids = []
-                            for text in duplicate_group:
-                                for entity in entities:
-                                    if entity['text'].lower() == text.lower():
-                                        entity_ids.append(entity['id'])
-                                        break
-                            
-                            if len(entity_ids) >= 2:
-                                merged_count = self._merge_entities(session, entity_ids)
-                                total_merged += merged_count
+            # ================================================================
+            # PHASE 2: GDS-based similarity resolution (KNN + WCC)
+            # ================================================================
+            print("[RESOLVE] Phase 2: Embedding-based similarity detection...")
             
-            print(f"Entity resolution complete. Merged {total_merged} entities.")
+            phase2_merged, flagged_for_review = self._resolve_entities_with_gds(
+                session, 
+                high_confidence_threshold=0.95,
+                medium_confidence_threshold=0.85
+            )
+            total_merged += phase2_merged
+            
+            print(f"[RESOLVE] Entity resolution complete. Merged {total_merged} entities.")
             logger.info(f"Entity resolution complete. Merged {total_merged} entities.")
+            
+            # ================================================================
+            # PHASE 3: User review of flagged entities
+            # ================================================================
+            if flagged_for_review:
+                self._prompt_user_review(session, flagged_for_review)
+    
+    def _merge_entities_preserve_all_types(self, session, duplicates: List[dict]) -> int:
+        """Merge duplicate entities, preserving ALL type labels and combining descriptions.
+        
+        Domain-agnostic approach: instead of picking one "best" type, we add all
+        type labels to the merged node. This preserves all contextual uses of the entity.
+        
+        Example: "Michigan" with types [STATE, ACADEMIC_INSTITUTION, GEOGRAPHIC_LOCATION]
+        becomes a single node with all three labels.
+        """
+        if len(duplicates) < 2:
+            return 0
+        
+        # Use first entity as primary (arbitrary choice since we keep all types)
+        primary = duplicates[0]
+        primary_id = primary['id']
+        
+        # Collect all unique types and descriptions
+        all_types = list(set(d.get('type', 'ENTITY') for d in duplicates if d.get('type')))
+        descriptions = [d.get('description', '') for d in duplicates if d.get('description')]
+        combined_description = ' | '.join(filter(None, descriptions))
+        
+        logger.info(f"Merging duplicates of '{primary.get('name')}': combining types {all_types}, merging {len(duplicates)-1} others")
+        
+        # First, add all type labels to the primary entity
+        for entity_type in all_types:
+            if entity_type:
+                try:
+                    # Add the type as a label (Neo4j labels are added with SET)
+                    session.run(f"""
+                        MATCH (e:__Entity__ {{id: $primary_id}})
+                        SET e:`{entity_type}`
+                    """, primary_id=primary_id)
+                except Exception as e:
+                    logger.error(f'Failed to add label {entity_type} to {primary_id}: {e}')
+        
+        # Store all types in a property as well (for easy querying)
+        try:
+            session.run("""
+                MATCH (e:__Entity__ {id: $primary_id})
+                SET e.entity_types = $types
+            """, primary_id=primary_id, types=all_types)
+        except Exception as e:
+            logger.error(f'Failed to set entity_types property for {primary_id}: {e}')
+        
+        merged_count = 0
+        for dup in duplicates[1:]:
+            dup_id = dup['id']
+            try:
+                # Transfer incoming relationships (except from Chunk - use MERGE to avoid duplicates)
+                session.run("""
+                    MATCH (n)-[r]->(e:__Entity__ {id: $dup_id})
+                    WHERE NOT n:Chunk
+                    MATCH (primary:__Entity__ {id: $primary_id})
+                    MERGE (n)-[r2:RELATED_TO]->(primary)
+                    SET r2 = properties(r)
+                    DELETE r
+                """, dup_id=dup_id, primary_id=primary_id)
+                
+                # Transfer HAS_ENTITY relationships from Chunks
+                session.run("""
+                    MATCH (c:Chunk)-[r:HAS_ENTITY]->(e:__Entity__ {id: $dup_id})
+                    MATCH (primary:__Entity__ {id: $primary_id})
+                    MERGE (c)-[:HAS_ENTITY]->(primary)
+                    DELETE r
+                """, dup_id=dup_id, primary_id=primary_id)
+                
+                # Transfer outgoing relationships
+                session.run("""
+                    MATCH (e:__Entity__ {id: $dup_id})-[r]->(n)
+                    MATCH (primary:__Entity__ {id: $primary_id})
+                    MERGE (primary)-[r2:RELATED_TO]->(n)
+                    SET r2 = properties(r)
+                    DELETE r
+                """, dup_id=dup_id, primary_id=primary_id)
+                
+                # Delete duplicate entity
+                session.run("""
+                    MATCH (e:__Entity__ {id: $dup_id})
+                    DETACH DELETE e
+                """, dup_id=dup_id)
+                
+                merged_count += 1
+                
+            except Exception as e:
+                logger.error(f'Failed to merge entity {dup_id} into {primary_id}: {e}')
+        
+        # Update primary entity with combined description if we merged anything
+        if merged_count > 0 and combined_description:
+            try:
+                session.run("""
+                    MATCH (e:__Entity__ {id: $primary_id})
+                    SET e.description = $description
+                """, primary_id=primary_id, description=combined_description[:1000])  # Limit length
+            except Exception as e:
+                logger.error(f'Failed to update description for {primary_id}: {e}')
+        
+        return merged_count
     
     def _merge_entities(self, session, entity_ids: List[str]) -> int:
         """Merge duplicate entities into the first one."""
@@ -1224,6 +1324,292 @@ class GraphOperationsMixin:
             except Exception as e:
                 logger.error(f'Failed to delete node with duplicate id: {dup_id}. Primary id: {primary_id}')
         return len(merged_entities)
+    
+    def _resolve_entities_with_gds(self, session, high_confidence_threshold: float = 0.95,
+                                   medium_confidence_threshold: float = 0.85) -> tuple:
+        """
+        Use Neo4j GDS for embedding-based entity resolution.
+        
+        Approach:
+        1. Create KNN graph based on entity embeddings
+        2. Use WCC to find connected components (clusters)
+        3. Auto-merge high confidence clusters
+        4. LLM verify medium confidence clusters
+        5. Flag low confidence / large clusters for user review
+        
+        Returns:
+            (merged_count, flagged_for_review)
+        """
+        merged_count = 0
+        flagged_for_review = []
+        
+        try:
+            # Check if GDS is available
+            gds_check = session.run("RETURN gds.version() as version").single()
+            if not gds_check:
+                print("[RESOLVE] GDS not available, skipping embedding-based resolution")
+                return 0, []
+            print(f"[RESOLVE] Using Neo4j GDS {gds_check['version']}")
+        except Exception as e:
+            print(f"[RESOLVE] GDS not available ({e}), skipping embedding-based resolution")
+            return 0, []
+        
+        try:
+            # Step 1: Create in-memory graph projection with entity embeddings
+            print("[RESOLVE] Creating graph projection for similarity detection...")
+            
+            # Drop existing projection if exists
+            try:
+                session.run("CALL gds.graph.drop('entity-similarity', false)")
+            except:
+                pass
+            
+            # Create projection with entities and their embeddings
+            session.run("""
+                CALL gds.graph.project(
+                    'entity-similarity',
+                    {
+                        __Entity__: {
+                            properties: ['embedding']
+                        }
+                    },
+                    '*'
+                )
+            """)
+            
+            # Step 2: Run KNN to find similar entity pairs
+            print(f"[RESOLVE] Finding similar entities (threshold: {medium_confidence_threshold})...")
+            
+            knn_result = session.run("""
+                CALL gds.knn.stream('entity-similarity', {
+                    nodeProperties: ['embedding'],
+                    topK: 3,
+                    similarityCutoff: $threshold,
+                    concurrency: 4
+                })
+                YIELD node1, node2, similarity
+                WITH gds.util.asNode(node1) as e1, gds.util.asNode(node2) as e2, similarity
+                RETURN e1.id as id1, e1.name as name1, e1.entity_type as type1,
+                       e2.id as id2, e2.name as name2, e2.entity_type as type2,
+                       similarity
+                ORDER BY similarity DESC
+            """, threshold=medium_confidence_threshold)
+            
+            # Collect candidate pairs
+            candidates = list(knn_result)
+            print(f"[RESOLVE] Found {len(candidates)} candidate pairs")
+            
+            if not candidates:
+                session.run("CALL gds.graph.drop('entity-similarity', false)")
+                return 0, []
+            
+            # Step 3: Group candidates using Union-Find (simpler than WCC for this case)
+            # Build clusters from pairs
+            clusters = self._build_clusters_from_pairs(candidates, high_confidence_threshold)
+            
+            print(f"[RESOLVE] Grouped into {len(clusters)} clusters")
+            
+            # Step 4: Process each cluster based on confidence
+            for cluster in clusters:
+                cluster_size = len(cluster['entities'])
+                avg_similarity = cluster['avg_similarity']
+                
+                if cluster_size > 5:
+                    # Large cluster - flag for review (might be over-merged)
+                    flagged_for_review.append({
+                        'reason': 'large_cluster',
+                        'entities': cluster['entities'],
+                        'avg_similarity': avg_similarity
+                    })
+                elif avg_similarity >= high_confidence_threshold:
+                    # High confidence - auto-merge
+                    entity_data = [{'id': e['id'], 'name': e['name'], 'type': e['type'], 'description': ''} 
+                                   for e in cluster['entities']]
+                    merged = self._merge_entities_preserve_all_types(session, entity_data)
+                    merged_count += merged
+                    logger.info(f"Auto-merged high confidence cluster: {[e['name'] for e in cluster['entities']]}")
+                elif avg_similarity >= medium_confidence_threshold:
+                    # Medium confidence - LLM verification
+                    entity_names = [e['name'] for e in cluster['entities']]
+                    if self._llm_verify_duplicates(entity_names):
+                        entity_data = [{'id': e['id'], 'name': e['name'], 'type': e['type'], 'description': ''} 
+                                       for e in cluster['entities']]
+                        merged = self._merge_entities_preserve_all_types(session, entity_data)
+                        merged_count += merged
+                        logger.info(f"LLM-verified and merged: {entity_names}")
+                    else:
+                        # LLM said no - flag for review
+                        flagged_for_review.append({
+                            'reason': 'llm_uncertain',
+                            'entities': cluster['entities'],
+                            'avg_similarity': avg_similarity
+                        })
+            
+            # Cleanup
+            session.run("CALL gds.graph.drop('entity-similarity', false)")
+            
+        except Exception as e:
+            logger.error(f"GDS-based resolution failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Try to cleanup
+            try:
+                session.run("CALL gds.graph.drop('entity-similarity', false)")
+            except:
+                pass
+        
+        return merged_count, flagged_for_review
+    
+    def _build_clusters_from_pairs(self, candidates: list, high_threshold: float) -> list:
+        """Build clusters from candidate pairs using Union-Find algorithm."""
+        # Union-Find data structure
+        parent = {}
+        
+        def find(x):
+            if x not in parent:
+                parent[x] = x
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+        
+        def union(x, y):
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+        
+        # Build entity info map and union similar entities
+        entity_info = {}
+        pair_similarities = {}
+        
+        for c in candidates:
+            id1, id2 = c['id1'], c['id2']
+            entity_info[id1] = {'id': id1, 'name': c['name1'], 'type': c['type1']}
+            entity_info[id2] = {'id': id2, 'name': c['name2'], 'type': c['type2']}
+            union(id1, id2)
+            pair_similarities[(id1, id2)] = c['similarity']
+        
+        # Group by cluster
+        cluster_map = {}
+        for entity_id in entity_info:
+            root = find(entity_id)
+            if root not in cluster_map:
+                cluster_map[root] = []
+            cluster_map[root].append(entity_info[entity_id])
+        
+        # Calculate average similarity per cluster
+        clusters = []
+        for root, entities in cluster_map.items():
+            if len(entities) < 2:
+                continue
+            
+            # Calculate average similarity of pairs in this cluster
+            similarities = []
+            entity_ids = [e['id'] for e in entities]
+            for i, id1 in enumerate(entity_ids):
+                for id2 in entity_ids[i+1:]:
+                    key = (id1, id2) if (id1, id2) in pair_similarities else (id2, id1)
+                    if key in pair_similarities:
+                        similarities.append(pair_similarities[key])
+            
+            avg_sim = sum(similarities) / len(similarities) if similarities else 0.85
+            
+            clusters.append({
+                'entities': entities,
+                'avg_similarity': avg_sim
+            })
+        
+        return clusters
+    
+    def _llm_verify_duplicates(self, entity_names: list) -> bool:
+        """Use LLM to verify if a list of entity names refer to the same entity."""
+        if len(entity_names) < 2:
+            return False
+        
+        prompt = f"""Do these names refer to the SAME real-world entity? 
+Names: {entity_names}
+
+Consider:
+- Abbreviations vs full names (e.g., "NY Times" = "The New York Times")
+- Nicknames vs formal names (e.g., "JFK" = "John F. Kennedy")
+- Spelling variations
+
+Reply with ONLY "yes" or "no"."""
+
+        try:
+            response = self.llm.invoke(prompt)
+            content = response.content.strip().lower() if hasattr(response, 'content') else str(response).strip().lower()
+            return content.startswith('yes')
+        except Exception as e:
+            logger.error(f"LLM verification failed: {e}")
+            return False  # Conservative: don't merge if unsure
+    
+    def _prompt_user_review(self, session, flagged_for_review: list):
+        """Present flagged entities to user for review and merge decisions."""
+        if not flagged_for_review:
+            return
+        
+        print("\n" + "="*70)
+        print("ENTITY RESOLUTION - REVIEW REQUIRED")
+        print("="*70)
+        print(f"\n{len(flagged_for_review)} entity groups need your review:\n")
+        
+        for i, item in enumerate(flagged_for_review, 1):
+            entities = item['entities']
+            reason = item['reason']
+            similarity = item.get('avg_similarity', 0)
+            
+            reason_text = {
+                'large_cluster': 'Large cluster (>5 entities) - may be over-merged',
+                'llm_uncertain': 'LLM uncertain if these are the same entity'
+            }.get(reason, reason)
+            
+            print(f"[{i}] {reason_text}")
+            print(f"    Similarity: {similarity:.2%}")
+            print(f"    Entities:")
+            for e in entities:
+                print(f"      - {e['name']} ({e.get('type', 'unknown')})")
+            print()
+        
+        print("-"*70)
+        print("Options:")
+        print("  Enter numbers to MERGE (e.g., '1 3 5' or '1,3,5')")
+        print("  Enter 'all' to merge ALL")
+        print("  Enter 'none' or press Enter to skip ALL")
+        print("-"*70)
+        
+        try:
+            user_input = input("\nYour choice: ").strip().lower()
+        except EOFError:
+            print("[SKIP] No terminal input available, skipping review")
+            return
+        
+        if not user_input or user_input == 'none':
+            print("[SKIP] No entities merged from review")
+            return
+        
+        if user_input == 'all':
+            merge_indices = list(range(len(flagged_for_review)))
+        else:
+            # Parse numbers
+            try:
+                merge_indices = [int(x.strip()) - 1 for x in user_input.replace(',', ' ').split() 
+                                if x.strip().isdigit()]
+            except:
+                print("[ERROR] Invalid input, skipping review")
+                return
+        
+        # Merge selected groups
+        merged_count = 0
+        for idx in merge_indices:
+            if 0 <= idx < len(flagged_for_review):
+                entities = flagged_for_review[idx]['entities']
+                entity_data = [{'id': e['id'], 'name': e['name'], 'type': e.get('type', 'ENTITY'), 'description': ''} 
+                               for e in entities]
+                merged = self._merge_entities_preserve_all_types(session, entity_data)
+                merged_count += merged
+                print(f"[MERGED] Group {idx+1}: {[e['name'] for e in entities]}")
+        
+        print(f"\n[REVIEW COMPLETE] Merged {merged_count} additional entities from review")
     
     def close(self):
         """Close the Neo4j driver."""
