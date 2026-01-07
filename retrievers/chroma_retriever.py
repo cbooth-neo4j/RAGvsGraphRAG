@@ -108,34 +108,21 @@ class ChromaRetriever:
         
         context = "\n\n".join(context_parts)
         
-        # Generate LLM response - use answer_style for prompt
-        if getattr(self, '_answer_style', 'ragas') == "hotpotqa":
-            # HotpotQA benchmark requires short, exact answers
-            prompt = f"""Answer the question using ONLY the retrieved documents below.
+        # Generate LLM response
+        # Note: answer_style is now handled by post-processing in the benchmark layer
+        prompt = f"""Answer the question based on the retrieved documents below.
 
 Question: {query}
 
 Retrieved Documents:
 {context}
 
-CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
-- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
-- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
-- For comparison questions asking "same" or "both": Answer "yes" or "no"
-- NO explanations, NO reasoning, NO sentences - just the bare answer
-- If you cannot determine the answer from the documents, respond with "unknown"
+Instructions:
+- Base your answer on the retrieved documents
+- Be factual and specific - cite entities, names, dates, and facts
+- If the documents don't contain enough information, state that clearly
 
 Answer:"""
-        else:
-            # RAGAS/real-world mode: verbose, comprehensive answers
-            prompt = f"""Based on the following retrieved documents, please provide a comprehensive answer to the question.
-
-Question: {query}
-
-Retrieved Documents:
-{context}
-
-Please provide a well-structured, informative response based on the retrieved information. If the documents don't contain enough information to fully answer the question, please indicate what information is missing."""
 
         try:
             # Handle different LLM response formats

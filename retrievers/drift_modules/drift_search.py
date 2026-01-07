@@ -600,16 +600,21 @@ async def query_drift_search(query: str, k: int = 5, graph_processor=None, **kwa
                     'error': str(e)
                 }
         
+        # Filter out answer_style from kwargs as DRIFTConfig doesn't support it
+        # answer_style is handled by the benchmark layer, not the DRIFT search itself
+        drift_kwargs = {k: v for k, v in kwargs.items() if k not in ['answer_style', 'k', 'graph_processor']}
+        
         # Configure DRIFT with benchmark parameters
         config = DRIFTConfig(
             max_concurrent=min(k, 3),  # Use k but limit to 3 for efficiency
-            **kwargs
+            **drift_kwargs
         )
         
         drift_search = DRIFTSearch(processor, config)
         
-        # Perform search
-        result = await drift_search.search(query, **kwargs)
+        # Perform search (also filter answer_style from search kwargs)
+        search_kwargs = {k: v for k, v in kwargs.items() if k not in ['answer_style', 'k', 'graph_processor']}
+        result = await drift_search.search(query, **search_kwargs)
         
         # Return in benchmark-compatible format
         return result.to_dict()

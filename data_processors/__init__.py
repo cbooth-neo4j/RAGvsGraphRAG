@@ -72,8 +72,9 @@ except ImportError as e:
         create_graph_from_chunks = None
 
 # Advanced processing is now integrated into build_graph/CustomGraphProcessor
-ADVANCED_GRAPH_PROCESSOR_AVAILABLE = False
-AdvancedGraphProcessor = None
+# AdvancedGraphProcessor is an alias for CustomGraphProcessor for backward compatibility
+ADVANCED_GRAPH_PROCESSOR_AVAILABLE = BASIC_GRAPH_PROCESSOR_AVAILABLE
+AdvancedGraphProcessor = CustomGraphProcessor  # Alias for backward compatibility with DRIFT, etc.
 
 # Central registry of all available processors
 AVAILABLE_PROCESSORS = {

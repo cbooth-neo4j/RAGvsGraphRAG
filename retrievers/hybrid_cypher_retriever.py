@@ -16,6 +16,11 @@ import warnings
 
 # Import centralized configuration
 from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm
+from utils.graph_rag_logger import setup_logging, get_logger
+
+# Setup logging
+setup_logging()
+logger = get_logger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -105,17 +110,29 @@ class HybridCypherRAGRetriever:
                 LIMIT 3
             } AS chunks,
 
-            // Find relevant communities
+            // Find relevant communities (including hierarchical traversal for DRIFT-style context)
             collect {
                 UNWIND nodes AS n
-                OPTIONAL MATCH (n)-[:IN_COMMUNITY]->(comm:__Community__)
-                WITH comm, 
+                // Get level 0 communities directly connected to entities
+                OPTIONAL MATCH (n)-[:IN_COMMUNITY]->(level0:__Community__)
+                WHERE level0 IS NOT NULL
+                
+                // Also traverse up the hierarchy to get higher-level summaries (DRIFT pattern)
+                OPTIONAL MATCH (level0)-[:PARENT_COMMUNITY*0..2]->(higher:__Community__)
+                WHERE higher.summary IS NOT NULL
+                
+                // Combine all communities from the hierarchy
+                WITH collect(DISTINCT level0) + collect(DISTINCT higher) AS all_comms
+                UNWIND all_comms AS comm
+                WITH DISTINCT comm,
                      coalesce(comm.community_rank, 0) AS rank, 
-                     coalesce(comm.weight, 1.0) AS weight
+                     coalesce(comm.weight, 1.0) AS weight,
+                     comm.level AS level
                 WHERE comm IS NOT NULL
+                // Prefer higher-level communities for broader context, then by rank
                 RETURN comm
-                ORDER BY rank DESC, weight DESC
-                LIMIT 3
+                ORDER BY level DESC, rank DESC, weight DESC
+                LIMIT 5
             } AS communities,
 
             // Find relationships between found entities
@@ -214,13 +231,49 @@ class HybridCypherRAGRetriever:
                             except Exception:
                                 chunk_texts.append(str(chunk))
                         
-                        content = "\n\n".join(chunk_texts) if chunk_texts else "No content available"
-                        
                         # Safely extract metadata with proper type checking
                         nodes = data.get('nodes', [])
                         communities = data.get('communities', [])
                         rels = data.get('rels', [])
                         outside = data.get('outside', {})
+                        
+                        # Build content with chunks AND community summaries for richer context
+                        content_parts = []
+                        
+                        # Add chunk texts
+                        if chunk_texts:
+                            content_parts.append("=== Retrieved Text Chunks ===")
+                            content_parts.extend(chunk_texts)
+                        
+                        # Add community summaries (hierarchical context for DRIFT-style retrieval)
+                        if communities:
+                            community_summaries = []
+                            for comm in communities:
+                                try:
+                                    if isinstance(comm, dict):
+                                        summary = comm.get('summary', '')
+                                        title = comm.get('title', '')
+                                        level = comm.get('level', 0)
+                                    elif hasattr(comm, 'get') and callable(comm.get):
+                                        summary = comm.get('summary', '')
+                                        title = comm.get('title', '')
+                                        level = comm.get('level', 0)
+                                    else:
+                                        summary = getattr(comm, 'summary', '') if hasattr(comm, 'summary') else ''
+                                        title = getattr(comm, 'title', '') if hasattr(comm, 'title') else ''
+                                        level = getattr(comm, 'level', 0) if hasattr(comm, 'level') else 0
+                                    
+                                    if summary:
+                                        level_label = f"[Level {level}]" if level else ""
+                                        community_summaries.append(f"{level_label} {title}: {summary}" if title else f"{level_label} {summary}")
+                                except Exception:
+                                    continue
+                            
+                            if community_summaries:
+                                content_parts.append("\n=== Community Context (Hierarchical Summaries) ===")
+                                content_parts.extend(community_summaries)
+                        
+                        content = "\n\n".join(content_parts) if content_parts else "No content available"
                         
                         # Handle outside entities safely
                         outside_nodes = []
@@ -336,48 +389,20 @@ class HybridCypherRAGRetriever:
                 context = "\n\n".join(context_parts)
 
                 # Generate LLM response with Local Entity hybrid context
-                # Use different prompts based on answer_style for benchmark compatibility
-                if answer_style == "hotpotqa":
-                    # HotpotQA benchmark requires short, exact answers for EM/F1 scoring
-                    prompt = f"""Answer the question using ONLY the retrieved context below.
+                # Note: answer_style is now handled by post-processing in the benchmark layer
+                prompt = f"""Answer the question based on the retrieved context below.
 
 Question: {query}
 
 Retrieved Context:
 {context}
-
-CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
-- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
-- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
-- For comparison questions asking "same" or "both": Answer "yes" or "no"
-- NO explanations, NO reasoning, NO sentences - just the bare answer
-- If you cannot determine the answer from context, respond with "unknown"
-
-Answer:"""
-                else:
-                    # RAGAS/real-world mode: verbose, comprehensive answers
-                    prompt = f"""You are answering a question using information retrieved through Local Entity GraphRAG, which provides entity-centric context including related chunks, communities, and relationships.
-
-Question: {query}
-
-Retrieved Context:
-{context}
-
-The context above comes from a graph-based retrieval system that:
-- Found relevant entities and their relationships
-- Retrieved chunks that mention these entities
-- Included community summaries for broader context
-- Identified related entities and their connections
 
 Instructions:
-1. Base your answer on the retrieved context, focusing on entity relationships and connections
-2. Use information from chunks, entity relationships, and community context
-3. If the context mentions specific entities, organizations, or relationships, include them in your answer
-4. Combine information across different parts of the context when they relate to the same entities
-5. If the context is insufficient, state what information is missing
-6. Ground your answer in the specific entities and relationships found in the graph
+- Base your answer on the retrieved context
+- Be factual and specific - cite entities, names, dates, and facts from the context
+- If the context is insufficient to answer, state that clearly
 
-Please provide a comprehensive, entity-focused response."""
+Answer:"""
 
                 try:
                     llm_response = self.llm.invoke(prompt)

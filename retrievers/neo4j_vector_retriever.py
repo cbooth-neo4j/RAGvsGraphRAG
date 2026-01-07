@@ -19,7 +19,7 @@ from neo4j_graphrag.retrievers import VectorRetriever
 from neo4j_graphrag.generation import GraphRAG
 
 # Import centralized configuration
-from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, ModelProvider
+from config import get_model_config, get_neo4j_embeddings, get_neo4j_llm, get_llm, ModelProvider
 
 # Load environment variables
 load_dotenv()
@@ -45,7 +45,8 @@ class Neo4jVectorRetriever:
                  driver=None,
                  index_name: str = INDEX_NAME,
                  embedder=None,
-                 llm_model=None):
+                 llm_model=None,
+                 answer_style: str = "ragas"):
         """
         Initialize the Neo4j Vector Retriever
         
@@ -54,6 +55,7 @@ class Neo4jVectorRetriever:
             index_name: Name of the vector index to use
             embedder: Embedding model (optional, will use default if not provided)
             llm_model: LLM model (optional, will use default if not provided)
+            answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         """
         from config.model_config import get_model_config
         
@@ -61,6 +63,10 @@ class Neo4jVectorRetriever:
         self.index_name = index_name
         self.embedder = embedder or embeddings
         self.llm_model = llm_model or llm
+        self.answer_style = answer_style
+        
+        # Get LangChain LLM for answer reformatting if needed
+        self.langchain_llm = get_llm()
         
         # Get expected embedding dimensions
         model_config = get_model_config()
@@ -69,6 +75,7 @@ class Neo4jVectorRetriever:
         print(f"📊 Neo4j Vector Retriever Configuration:")
         print(f"   Index: {index_name}")
         print(f"   Embedding: {model_config.embedding_model.value} ({self.embedding_dim} dims)")
+        print(f"   Answer Style: {answer_style}")
         
         # Initialize the vector retriever
         self.vector_retriever = VectorRetriever(
@@ -83,7 +90,7 @@ class Neo4jVectorRetriever:
             llm=self.llm_model
         )
     
-    def search(self, query: str, top_k: int = 5, answer_style: str = "ragas") -> Dict[str, Any]:
+    def search(self, query: str, top_k: int = 5, answer_style: str = None) -> Dict[str, Any]:
         """
         Perform vector search and generate response
         
@@ -91,13 +98,14 @@ class Neo4jVectorRetriever:
             query: Search query
             top_k: Number of top results to retrieve
             answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
-                         Note: This retriever uses GraphRAG's built-in pipeline which handles prompts internally.
-                         The answer_style is accepted for API consistency but may not affect output format.
+                         If None, uses the instance's default answer_style.
             
         Returns:
             Dictionary with response and retrieval details
         """
-        # Note: answer_style accepted for API consistency but GraphRAG pipeline handles prompts internally
+        # Use instance answer_style if not specified
+        effective_answer_style = answer_style if answer_style is not None else self.answer_style
+        
         try:
             print(f"🔍 Executing Neo4j Vector search for: {query}")
             
@@ -147,16 +155,21 @@ class Neo4jVectorRetriever:
                 print(f"    - Score: {detail.get('score', 'N/A')}")
                 print(f"    - Content preview: {detail.get('content', '')[:100]}...")
             
+            # Get answer from GraphRAG pipeline
+            # Note: answer_style post-processing is now handled by the benchmark layer
+            final_answer = response.answer if hasattr(response, 'answer') else str(response)
+            
             return {
                 'method': 'Neo4j Vector Search + LLM',
                 'query': query,
-                'final_answer': response.answer if hasattr(response, 'answer') else str(response),
+                'final_answer': final_answer,
                 'retrieved_chunks': len(retrieval_details),
                 'retrieval_details': retrieval_details,
                 'performance_metrics': {
                     'search_type': 'pure_vector',
                     'index_used': self.index_name,
-                    'retrieved_chunks': len(retrieval_details)
+                    'retrieved_chunks': len(retrieval_details),
+                    'answer_style': effective_answer_style
                 }
             }
             
@@ -182,13 +195,14 @@ class Neo4jVectorRetriever:
             self.driver.close()
 
 
-def create_neo4j_vector_retriever(driver=None, index_name: str = INDEX_NAME, **kwargs) -> Neo4jVectorRetriever:
+def create_neo4j_vector_retriever(driver=None, index_name: str = INDEX_NAME, answer_style: str = "ragas", **kwargs) -> Neo4jVectorRetriever:
     """
     Factory function to create a Neo4j Vector Retriever
     
     Args:
         driver: Optional Neo4j driver instance
         index_name: Vector index name to use
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         **kwargs: Additional arguments for retriever configuration
         
     Returns:
@@ -197,6 +211,7 @@ def create_neo4j_vector_retriever(driver=None, index_name: str = INDEX_NAME, **k
     return Neo4jVectorRetriever(
         driver=driver,
         index_name=index_name,
+        answer_style=answer_style,
         **kwargs
     )
 
@@ -209,7 +224,7 @@ def query_neo4j_vector_rag(query: str, k: int = 5, answer_style: str = "ragas", 
         query: The search query
         k: Number of top results to retrieve
         answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
-                     Note: Uses GraphRAG's built-in pipeline, answer_style accepted for API consistency.
+                     For hotpotqa mode, adds a post-processing step to extract concise answers.
         **kwargs: Additional configuration options
         
     Returns:
@@ -217,11 +232,11 @@ def query_neo4j_vector_rag(query: str, k: int = 5, answer_style: str = "ragas", 
     """
     retriever = None
     try:
-        # Create retriever instance
-        retriever = create_neo4j_vector_retriever(**kwargs)
+        # Create retriever instance with answer_style
+        retriever = create_neo4j_vector_retriever(answer_style=answer_style, **kwargs)
         
         # Perform search
-        result = retriever.search(query, top_k=k)
+        result = retriever.search(query, top_k=k, answer_style=answer_style)
         
         return result
         

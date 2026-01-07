@@ -1514,6 +1514,7 @@ class LocalSearch:
 
 
 # System Prompts for advanced GraphRAG processing
+# Note: answer_style is now handled by post-processing in the benchmark layer
 LOCAL_SEARCH_SYSTEM_PROMPT = """
 You are a helpful assistant answering questions based on the provided context data.
 
@@ -1527,12 +1528,15 @@ Guidelines:
 1. Answer based on the provided context
 2. Be specific and cite relevant entities or sources when possible
 3. If the context doesn't contain sufficient information, state this clearly
-4. Provide a comprehensive but concise answer
-5. Use a {response_type} format for your response
+4. Provide a factual, well-structured answer
 
 Context Data:
 {context_data}
 """
+
+def get_local_search_prompt(answer_style: str = "ragas") -> str:
+    """Get the local search prompt - answer_style is now handled by benchmark post-processing."""
+    return LOCAL_SEARCH_SYSTEM_PROMPT
 
 MAP_SYSTEM_PROMPT = """
 You are a helpful assistant responding to questions about data in community reports.
@@ -1594,12 +1598,15 @@ state this clearly.
 Guidelines:
 1. Answer based on the provided context
 2. Be specific and cite relevant community titles where helpful
-3. Be comprehensive but concise
-4. Use a {response_type} format for your response
+3. Provide a factual, well-structured answer
 
 Context Data:
 {context_data}
 """
+
+def get_global_search_prompt(answer_style: str = "ragas") -> str:
+    """Get the global search prompt - answer_style is now handled by benchmark post-processing."""
+    return GLOBAL_SINGLE_SYSTEM_PROMPT
 
 
 class GlobalSearchSinglePass:
@@ -2314,10 +2321,16 @@ class AdvancedGraphRAGRetriever:
 class LightweightAdvancedGraphRAGRetriever:
     """Lightweight retriever that connects directly to Neo4j without processor initialization."""
     
-    def __init__(self):
-        """Initialize with direct Neo4j connection."""
+    def __init__(self, answer_style: str = "ragas"):
+        """Initialize with direct Neo4j connection.
+        
+        Args:
+            answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        """
         # Load environment variables
         load_dotenv()
+        
+        self.answer_style = answer_style
         
         # Get Neo4j connection details
         neo4j_uri = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
@@ -2338,7 +2351,7 @@ class LightweightAdvancedGraphRAGRetriever:
         # Initialize context builders
         self._initialize_context_builders()
         
-        # Initialize search engines
+        # Initialize search engines with answer_style
         self._initialize_search_engines()
     
     def _load_graph_data(self):
@@ -2372,17 +2385,23 @@ class LightweightAdvancedGraphRAGRetriever:
         )
     
     def _initialize_search_engines(self):
-        """Initialize search engines."""
+        """Initialize search engines with standard prompts.
+        Note: answer_style is now handled by post-processing in the benchmark layer."""
+        local_prompt = get_local_search_prompt()
+        global_prompt = get_global_search_prompt()
+        response_type = "multiple paragraphs"
+        
         self.local_search = LocalSearch(
             model=self.llm,
             context_builder=self.local_context_builder,
-            response_type="multiple paragraphs",
+            response_type=response_type,
+            system_prompt=local_prompt,
         )
         
         self.global_search = GlobalSearch(
             model=self.llm,
             context_builder=self.global_context_builder,
-            response_type="multiple paragraphs",
+            response_type=response_type,
         )
     
     async def local_search_query(self, query: str, **kwargs) -> Dict[str, Any]:
@@ -2453,8 +2472,15 @@ class LightweightAdvancedGlobalOnlyRetriever:
     - Defaults to single-pass global answering (1 LLM call).
     """
 
-    def __init__(self):
+    def __init__(self, answer_style: str = "ragas"):
+        """Initialize with direct Neo4j connection.
+        
+        Args:
+            answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
+        """
         load_dotenv()
+        
+        self.answer_style = answer_style
 
         neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         neo4j_user = os.getenv("NEO4J_USER", "neo4j")
@@ -2474,11 +2500,17 @@ class LightweightAdvancedGlobalOnlyRetriever:
             data_loader=self.data_loader,
         )
 
+        # Initialize search engines with standard prompts
+        # Note: answer_style is now handled by post-processing in the benchmark layer
+        global_prompt = get_global_search_prompt()
+        response_type = "multiple paragraphs"
+
         # Engines
         self.global_search_single_pass = GlobalSearchSinglePass(
             model=self.llm,
             context_builder=self.global_context_builder,
-            response_type="multiple paragraphs",
+            response_type=response_type,
+            system_prompt=global_prompt,
             context_builder_params={"single_batch": True},
         )
 
@@ -2486,7 +2518,7 @@ class LightweightAdvancedGlobalOnlyRetriever:
         self.global_search_map_reduce = GlobalSearch(
             model=self.llm,
             context_builder=self.global_context_builder,
-            response_type="multiple paragraphs",
+            response_type=response_type,
             context_builder_params={"single_batch": False},
         )
 
@@ -2553,13 +2585,14 @@ class LightweightAdvancedGlobalOnlyRetriever:
 
 
 # Main integration functions for benchmark compatibility
-async def query_advanced_graphrag_local(query: str, k: int = 10, **kwargs) -> Dict[str, Any]:
+async def query_advanced_graphrag_local(query: str, k: int = 10, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
     """
     Advanced local GraphRAG retrieval
     
     Args:
         query: The search query
         k: Number of entities to consider
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         **kwargs: Additional configuration options
     
     Returns:
@@ -2569,7 +2602,7 @@ async def query_advanced_graphrag_local(query: str, k: int = 10, **kwargs) -> Di
     # Use lightweight connection for benchmarking - no processor initialization
     try:
         # Create a minimal retriever without processor initialization overhead
-        retriever = LightweightAdvancedGraphRAGRetriever()
+        retriever = LightweightAdvancedGraphRAGRetriever(answer_style=answer_style)
         
         # Perform local search
         result = await retriever.local_search_query(
@@ -2601,13 +2634,14 @@ async def query_advanced_graphrag_local(query: str, k: int = 10, **kwargs) -> Di
             retriever.close()
 
 
-async def query_advanced_graphrag_global(query: str, k: int = 8, **kwargs) -> Dict[str, Any]:
+async def query_advanced_graphrag_global(query: str, k: int = 8, answer_style: str = "ragas", **kwargs) -> Dict[str, Any]:
     """
     Advanced global GraphRAG retrieval
     
     Args:
         query: The search query
         k: Number of communities to consider (passed to context builder)
+        answer_style: Response format - "hotpotqa" for short exact answers, "ragas" for verbose answers
         **kwargs: Additional configuration options
     
     Returns:
@@ -2619,7 +2653,7 @@ async def query_advanced_graphrag_global(query: str, k: int = 8, **kwargs) -> Di
         strategy = kwargs.pop("strategy", "single_pass")
         top_k_communities = kwargs.pop("top_k_communities", k)
 
-        retriever = LightweightAdvancedGlobalOnlyRetriever()
+        retriever = LightweightAdvancedGlobalOnlyRetriever(answer_style=answer_style)
 
         result = await retriever.global_search_query(
             query,
@@ -2713,7 +2747,7 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
         # For hybrid mode, run both local and global and combine
         try:
             # Create a minimal retriever without processor initialization overhead
-            retriever = LightweightAdvancedGraphRAGRetriever()
+            retriever = LightweightAdvancedGraphRAGRetriever(answer_style=answer_style)
             
             # Run both local and global searches
             logger.debug(f"Local Search started:")
@@ -2721,8 +2755,23 @@ async def query_advanced_graphrag(query: str, mode: str = "hybrid", k: int = 5, 
             logger.debug(f"Global Search started:")
             global_result = await retriever.global_search_query(query, **kwargs)
             
-            # Combine responses - prioritize local but include global insights
-            combined_answer = f"**Local Context Analysis:**\n{local_result['final_answer']}\n\n**Global Context Analysis:**\n{global_result['final_answer']}"
+            # Combine responses based on answer_style
+            if answer_style == "hotpotqa":
+                # For HotpotQA, prefer the local answer (more specific) but use global as fallback
+                local_answer = local_result['final_answer'].strip()
+                global_answer = global_result['final_answer'].strip()
+                
+                # Use local answer if it's a valid short answer, otherwise use global
+                if local_answer.lower() in ['yes', 'no', 'unknown'] or len(local_answer) < 100:
+                    combined_answer = local_answer
+                elif global_answer.lower() in ['yes', 'no', 'unknown'] or len(global_answer) < 100:
+                    combined_answer = global_answer
+                else:
+                    # Take just the first response without formatting
+                    combined_answer = local_answer
+            else:
+                # For RAGAS, combine with markdown formatting
+                combined_answer = f"**Local Context Analysis:**\n{local_result['final_answer']}\n\n**Global Context Analysis:**\n{global_result['final_answer']}"
             
             # Combine retrieval details
             combined_details = local_result['retrieval_details'] + global_result['retrieval_details']

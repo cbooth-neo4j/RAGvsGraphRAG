@@ -318,27 +318,9 @@ class GraphRAGRetriever:
                 
                 context = "\n\n".join(context_parts)
                 
-                # Generate LLM response with GraphRAG context - use answer_style for prompt
-                if getattr(self, '_answer_style', 'ragas') == "hotpotqa":
-                    # HotpotQA benchmark requires short, exact answers
-                    prompt = f"""Answer the question using ONLY the retrieved documents below.
-
-Question: {query}
-
-Retrieved Documents:
-{context}
-
-CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
-- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
-- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
-- For comparison questions asking "same" or "both": Answer "yes" or "no"
-- NO explanations, NO reasoning, NO sentences - just the bare answer
-- If you cannot determine the answer from the documents, respond with "unknown"
-
-Answer:"""
-                else:
-                    # RAGAS/real-world mode: verbose, comprehensive answers
-                    prompt = f"""Based on the following retrieved documents, provide a factual answer to the question.
+                # Generate LLM response with GraphRAG context
+                # Note: answer_style is now handled by post-processing in the benchmark layer
+                prompt = f"""Answer the question based on the retrieved documents below.
 
 Question: {query}
 
@@ -346,13 +328,11 @@ Retrieved Documents:
 {context}
 
 Instructions:
-1. Base your answer strictly on the information in the retrieved documents
-2. You may combine information from multiple documents if they are related
-3. If the documents don't contain enough information to answer the question completely, state this clearly
-4. Do not make inferences beyond what is explicitly stated in the documents
-5. When combining information from multiple documents, ensure accuracy and avoid mixing unrelated facts
+- Base your answer on the retrieved documents
+- Be factual and specific - cite entities, names, dates, and facts from the documents
+- If the documents don't contain enough information, state that clearly
 
-Please provide a factual, well-structured response."""
+Answer:"""
 
                 try:
                     llm_response = self.llm.invoke(prompt)

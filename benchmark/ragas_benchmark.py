@@ -170,6 +170,88 @@ def load_benchmark_data_jsonl(jsonl_path: str) -> List[Dict[str, str]]:
     print(f"Loaded {len(benchmark_data)} benchmark questions from JSONL")
     return benchmark_data
 
+
+def extract_concise_answer_for_hotpotqa(query: str, verbose_answer: str) -> str:
+    """
+    Post-process a verbose answer to extract a concise HotpotQA-style answer.
+    
+    This is applied as a final step in the benchmark layer to ensure all retrievers
+    produce concise answers suitable for HotpotQA exact match evaluation.
+    
+    Args:
+        query: The original question
+        verbose_answer: The verbose answer from the retriever
+        
+    Returns:
+        A concise answer suitable for HotpotQA evaluation
+    """
+    # If already concise, return as-is
+    answer_lower = verbose_answer.strip().lower()
+    if answer_lower in ['yes', 'no', 'unknown', 'true', 'false']:
+        return answer_lower
+    
+    # If answer is already short (less than 50 chars), clean and return
+    if len(verbose_answer.strip()) < 50:
+        # Remove common prefixes
+        clean_answer = verbose_answer.strip()
+        for prefix in ["the answer is ", "answer: ", "based on the context, ", "yes, ", "no, "]:
+            if clean_answer.lower().startswith(prefix):
+                clean_answer = clean_answer[len(prefix):]
+        return clean_answer.strip().lower()
+    
+    # For longer answers, use LLM to extract concise answer
+    try:
+        from langchain_core.messages import SystemMessage, HumanMessage
+        
+        extraction_prompt = f"""Extract ONLY the exact answer from this verbose response. 
+
+RULES:
+- For yes/no questions: respond with ONLY 'yes' or 'no'
+- For factual questions: respond with ONLY the specific name, number, date, or entity
+- If the answer cannot be determined: respond with 'unknown'
+- NO explanations, NO reasoning, NO complete sentences
+- Just the bare answer in 1-5 words maximum
+
+Question: {query}
+
+Verbose Answer: {verbose_answer[:1000]}
+
+Exact Answer (1-5 words only):"""
+        
+        messages = [
+            SystemMessage(content="You extract exact, concise answers from verbose text. Output only the answer, nothing else."),
+            HumanMessage(content=extraction_prompt)
+        ]
+        
+        response = llm.invoke(messages)
+        concise = response.content.strip().lower()
+        
+        # Clean up any remaining verbosity
+        for prefix in ["the answer is ", "answer: ", "exact answer: "]:
+            if concise.startswith(prefix):
+                concise = concise[len(prefix):]
+        
+        # Remove quotes and periods
+        concise = concise.strip('"\'.')
+        
+        return concise
+        
+    except Exception as e:
+        print(f"  ⚠️ Answer extraction fallback: {e}")
+        # Fallback: take first sentence, clean it up
+        first_sentence = verbose_answer.split('.')[0].strip()
+        
+        # Check if first sentence contains yes/no
+        first_lower = first_sentence.lower()
+        if 'yes' in first_lower and 'no' not in first_lower:
+            return 'yes'
+        elif 'no' in first_lower and 'yes' not in first_lower:
+            return 'no'
+        
+        # Return cleaned first sentence (max 50 chars)
+        return first_sentence[:50].lower()
+
+
 def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approach: str = "chroma", answer_style: str = "ragas") -> List[Dict[str, Any]]:
     """
     Collect evaluation data following RAGAS documentation pattern
@@ -253,6 +335,14 @@ def collect_evaluation_data_simple(benchmark_data: List[Dict[str, str]], approac
             
             # Get the response
             response = result.get('final_answer', '')
+            
+            # Post-process for HotpotQA: extract concise answers from verbose responses
+            if answer_style == "hotpotqa" and response:
+                original_response = response
+                response = extract_concise_answer_for_hotpotqa(query, response)
+                # Log if we extracted a different answer
+                if response != original_response[:len(response)].lower():
+                    print(f"    → Extracted: '{response}' from '{original_response[:50]}...'")
             
             # Create RAGAS-compatible data structure with field names expected by metrics
             dataset.append({

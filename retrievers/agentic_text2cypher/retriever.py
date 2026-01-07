@@ -316,45 +316,20 @@ RETURN item.name, org.name, org.ai_summary
 {response_format_instructions}
 """
 
-# Response format instructions for different answer styles
-HOTPOTQA_RESPONSE_FORMAT = """**CRITICAL: Your final response must be EXTREMELY CONCISE.**
-
-HotpotQA-style benchmarks expect answers in this exact format:
-- For yes/no questions: respond with just `yes` or `no` (lowercase)
-- For "who" questions: respond with just the person/entity name
-- For "what" questions: respond with just the specific fact or entity
-- For "which" questions: respond with just the selection
-- For comparison questions ("who is older/taller/etc"): respond with just the name
-
-**DO NOT include:**
-- Explanations or reasoning in your final answer
-- Source citations or confidence levels
-- Full sentences like "Yes, they are both American"
-- Phrases like "The answer is..." or "Based on my research..."
-
-Your thinking and exploration can be detailed, but your FINAL ANSWER must be just the bare fact.
-
-If you cannot find the answer, respond with: `unknown`"""
-
-RAGAS_RESPONSE_FORMAT = """Provide a comprehensive, well-reasoned answer based on your graph exploration.
+# Default response format - post-processing in benchmark layer handles answer_style
+DEFAULT_RESPONSE_FORMAT = """Provide a factual answer based on your graph exploration.
 
 Your response should:
-- Explain your findings clearly and thoroughly
+- State the answer clearly and directly
 - Reference the entities and relationships you discovered
-- Include relevant context from the knowledge graph
-- Be suitable for evaluation by semantic similarity metrics
+- Be factual and specific - cite names, dates, and facts
 
-If the information is insufficient, explain what you found and what is missing."""
+If the information is insufficient, state what you found and what is missing."""
 
 
-def get_system_prompt(answer_style: str = "hotpotqa") -> str:
-    """Get the system prompt with appropriate response format based on answer_style."""
-    if answer_style == "ragas":
-        response_format = RAGAS_RESPONSE_FORMAT
-    else:
-        response_format = HOTPOTQA_RESPONSE_FORMAT
-    
-    return GRAPH_EXPLORATION_SYSTEM_PROMPT.format(response_format_instructions=response_format)
+def get_system_prompt(answer_style: str = "ragas") -> str:
+    """Get the system prompt - answer_style is now handled by benchmark post-processing."""
+    return GRAPH_EXPLORATION_SYSTEM_PROMPT.format(response_format_instructions=DEFAULT_RESPONSE_FORMAT)
 
 
 @dataclass 
@@ -459,10 +434,35 @@ class AgenticText2CypherRetriever:
                 for msg in reversed(result["messages"]):
                     if hasattr(msg, 'content') and msg.content:
                         if hasattr(msg, 'type') and msg.type == 'ai':
-                            final_answer = msg.content
+                            content = msg.content
+                            # Handle case where content is a list of content blocks
+                            if isinstance(content, list):
+                                # Extract text from content blocks
+                                text_parts = []
+                                for block in content:
+                                    if isinstance(block, str):
+                                        text_parts.append(block)
+                                    elif isinstance(block, dict) and 'text' in block:
+                                        text_parts.append(block['text'])
+                                    elif hasattr(block, 'text'):
+                                        text_parts.append(block.text)
+                                final_answer = ' '.join(text_parts)
+                            else:
+                                final_answer = str(content)
                             break
                         elif isinstance(msg, dict) and msg.get('role') == 'assistant':
-                            final_answer = msg.get('content', '')
+                            content = msg.get('content', '')
+                            # Handle case where content is a list
+                            if isinstance(content, list):
+                                text_parts = []
+                                for block in content:
+                                    if isinstance(block, str):
+                                        text_parts.append(block)
+                                    elif isinstance(block, dict) and 'text' in block:
+                                        text_parts.append(block['text'])
+                                final_answer = ' '.join(text_parts)
+                            else:
+                                final_answer = str(content) if content else ''
                             break
                 
                 # Count tool calls and extract queries

@@ -976,27 +976,9 @@ class Text2CypherRAGRetriever:
                 context = "\n\n".join(context_parts)
                 logger.debug(f"Combined context length: {len(context)} characters")
                 
-                # Use different prompts based on answer_style
-                if getattr(self, '_answer_style', 'ragas') == "hotpotqa":
-                    # HotpotQA benchmark requires short, exact answers
-                    prompt = f"""Answer the question using ONLY the query results below.
-
-Question: {query}
-
-Query Results:
-{context}
-
-CRITICAL INSTRUCTIONS FOR HOTPOTQA BENCHMARK:
-- For yes/no questions: Answer ONLY "yes" or "no" (lowercase, no punctuation)
-- For entity questions: Answer ONLY with the entity name (e.g., "Scott Derrickson", "1923", "United States")
-- For comparison questions asking "same" or "both": Answer "yes" or "no"
-- NO explanations, NO reasoning, NO sentences - just the bare answer
-- If you cannot determine the answer from the results, respond with "unknown"
-
-Answer:"""
-                else:
-                    # RAGAS/real-world mode: verbose, comprehensive answers
-                    prompt = f"""Based on the following query results from a knowledge graph database, provide a comprehensive answer to the question.
+                # Generate LLM response from query results
+                # Note: answer_style is now handled by post-processing in the benchmark layer
+                prompt = f"""Answer the question based on the query results below.
 
 Question: {query}
 
@@ -1004,14 +986,11 @@ Query Results:
 {context}
 
 Instructions:
-1. Use the information from the query results to answer the question directly
-2. If the results contain the exact answer, state it clearly
-3. If the results are partial or need interpretation, explain what you found
-4. If the results don't contain enough information to answer the question, state this clearly
-5. Be factual and only use information present in the results
-6. Format your response clearly and concisely
+- Base your answer on the query results
+- Be factual and specific - cite entities, names, dates, and facts
+- If the results don't contain enough information, state that clearly
 
-Please provide a factual, well-structured response."""
+Answer:"""
 
                 try:
                     llm_response = self.llm.invoke(prompt)
