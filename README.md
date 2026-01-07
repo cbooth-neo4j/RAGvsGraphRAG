@@ -21,10 +21,10 @@ A comprehensive evaluation framework comparing various RAG approaches using the 
 - **Quality metrics** and performance analysis
 
 ### **🧪 HotpotQA Benchmark Integration**
-- **Multi-hop reasoning questions** from the HotpotQA fullwiki dataset (~7,400 questions)
-- **Wikipedia corpus** - Articles downloaded and ingested automatically
+- **Multi-hop reasoning questions** from the HotpotQA fullwiki dataset (7,405 total questions)
+- **Wikipedia corpus** - Articles downloaded and ingested automatically (~10 articles per question)
 - **Research-grade evaluation** - Rigorous testing with ground truth answers
-- **Multiple presets** from smoke (50 questions) to full (7,400 questions)
+- **Scalable presets** - From micro (1 question, ~2 articles) to full (7,405 questions, ~10K articles)
 
 All approaches are evaluated using RAGAS framework with automated visualizations and comprehensive performance metrics.
 
@@ -198,9 +198,9 @@ python -m benchmark.report_global_perf \
 - **Interactive CLI approval** for discovered entity types
 
 ### **🧪 HotpotQA Benchmark** 
-- **~7,400 multi-hop questions** requiring reasoning over multiple Wikipedia articles
-- **Automatic Wikipedia download** with intelligent caching
-- **Multiple presets** for quick testing to full evaluation
+- **7,405 multi-hop questions** requiring reasoning over multiple Wikipedia articles
+- **Automatic Wikipedia download** with intelligent caching (~10 articles per question)
+- **Scalable presets** - from 1 question (micro) to full 7,405 questions
 - **Research-grade evaluation** matching academic benchmarks
 
 ### **🔍 8 Retrieval Approaches**
@@ -385,13 +385,15 @@ python -m benchmark smoke --hotpotqa --graphrag --build-database
 
 ### Presets
 
-| Preset | Questions | Use Case |
-|--------|-----------|----------|
-| `micro` | 1 | Sanity check |
-| `mini` | 10 | Development |
-| `smoke` | 50 | Standard test |
-| `dev` | 200 | Thorough test |
-| `full` | ~7400 | Complete benchmark |
+| Preset | Questions | Articles (approx) | Use Case |
+|--------|-----------|-------------------|----------|
+| `micro` | 1 | ~10 | Sanity check |
+| `mini` | 10 | ~100 | Development |
+| `smoke` | 50 | ~500 | Standard test |
+| `dev` | 500 | ~4,000 | Thorough test |
+| `full` | 7,405 | ~10,000 | Complete benchmark |
+
+> **Note:** Each HotpotQA question references 2 "gold" Wikipedia articles plus ~8 distractor articles. Article counts decrease per question at larger scales due to deduplication (shared articles across questions).
 
 ### Metrics
 

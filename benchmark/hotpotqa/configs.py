@@ -9,10 +9,10 @@ from typing import Dict, List, Optional, Any
 
 BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
     "micro": {
-        "description": "Minimal ETL test (1 question, ~2 articles)",
+        "description": "Minimal ETL test (1 question, ~10 articles)",
         "question_limit": 1,
         "retrievers": ["chroma"],
-        "estimated_articles": 2,
+        "estimated_articles": 10,  # 2 gold + ~8 distractors per question
         "estimated_cost": "<$0.10",
         "estimated_time_minutes": 1
     },
@@ -25,18 +25,18 @@ BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
         "estimated_time_minutes": 8
     },
     "smoke": {
-        "description": "Quick validation run",
+        "description": "Quick validation run (50 questions, ~500 articles)",
         "question_limit": 50,
         "retrievers": ["chroma", "graphrag"],
-        "estimated_articles": 100,
+        "estimated_articles": 500,  # ~10 articles per question with some deduplication
         "estimated_cost": "$5",
         "estimated_time_minutes": 15
     },
     "dev": {
-        "description": "Development benchmark for testing improvements",
+        "description": "Development benchmark (500 questions, ~4000 articles)",
         "question_limit": 500,
         "retrievers": ["chroma", "graphrag", "hybrid-cypher", "advanced-graphrag"],
-        "estimated_articles": 1000,
+        "estimated_articles": 4000,  # Higher deduplication at scale
         "estimated_cost": "$20",
         "estimated_time_minutes": 60
     },
@@ -49,10 +49,10 @@ BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
         "estimated_time_minutes": 300
     },
     "mini": {
-        "description": "Minimal test (10 questions)",
+        "description": "Minimal test (10 questions, ~109 articles)",
         "question_limit": 10,
         "retrievers": ["chroma"],
-        "estimated_articles": 100,  # ~10 articles per question (2 gold + 8 distractors)
+        "estimated_articles": 109,  # Actual count from prepared corpus
         "estimated_cost": "$1",
         "estimated_time_minutes": 5
     }
