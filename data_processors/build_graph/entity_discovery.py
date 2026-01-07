@@ -688,47 +688,46 @@ class EntityDiscoveryMixin:
         try:
             response = self.llm.invoke(prompt)
             
-            # Enhanced JSON parsing for Ollama compatibility
+            # Enhanced JSON parsing with robust extraction
             content = response.content.strip()
             
-            # Try multiple approaches to extract valid JSON
+            # Step 1: Strip markdown code blocks first
+            cleaned = content
+            if cleaned.startswith('```json'):
+                cleaned = cleaned[7:]
+            elif cleaned.startswith('```'):
+                cleaned = cleaned[3:]
+            if cleaned.endswith('```'):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            
+            # Step 2: Find the JSON object boundaries (handle nested braces)
             json_content = None
-            
-            # Approach 1: Look for complete JSON object
-            json_match = re.search(r'(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})', content, re.DOTALL)
-            if json_match:
-                json_content = json_match.group(1)
-            
-            # Approach 2: Extract from code blocks
-            if not json_content:
-                json_blocks = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE)
-                if json_blocks:
-                    json_content = json_blocks[0]
-            
-            # Approach 3: Clean markdown and try direct parsing
-            if not json_content:
-                cleaned = content
-                if cleaned.startswith('```json'):
-                    cleaned = cleaned[7:]
-                elif cleaned.startswith('```'):
-                    cleaned = cleaned[3:]
-                if cleaned.endswith('```'):
-                    cleaned = cleaned[:-3]
-                cleaned = cleaned.strip()
+            if '{' in cleaned:
+                start = cleaned.find('{')
+                # Count braces to find matching closing brace
+                brace_count = 0
+                end = -1
+                for i, char in enumerate(cleaned[start:], start):
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            end = i
+                            break
                 
-                if cleaned.startswith('{') and cleaned.endswith('}'):
-                    json_content = cleaned
+                if end > start:
+                    json_content = cleaned[start:end+1]
             
-            # Approach 4: Try to fix common JSON issues
-            if not json_content and '{' in content and '}' in content:
-                # Extract everything between first { and last }
-                start = content.find('{')
-                end = content.rfind('}')
-                if start != -1 and end != -1 and end > start:
-                    json_content = content[start:end+1]
-                    # Try to fix common issues like trailing commas
-                    json_content = re.sub(r',\s*}', '}', json_content)
-                    json_content = re.sub(r',\s*]', ']', json_content)
+            # Step 3: Fix common JSON issues
+            if json_content:
+                # Remove trailing commas before } or ]
+                json_content = re.sub(r',\s*}', '}', json_content)
+                json_content = re.sub(r',\s*]', ']', json_content)
+                # Fix unescaped quotes in strings (basic)
+                # Replace control characters
+                json_content = json_content.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
             
             if not json_content:
                 raise json.JSONDecodeError("No valid JSON found in response", content, 0)
@@ -755,7 +754,22 @@ class EntityDiscoveryMixin:
             
         except json.JSONDecodeError as e:
             print(f"Warning: Entity extraction JSON parsing failed: {e}")
-            print(f"Raw response content: '{content[:200]}...'")
+            print(f"Raw response (first 300 chars): '{content[:300]}...'")
+            if json_content:
+                print(f"Extracted JSON (first 300 chars): '{json_content[:300]}...'")
+            # Try to salvage partial results
+            try:
+                # Attempt to fix truncated JSON by closing open brackets
+                if json_content:
+                    fixed = json_content
+                    open_braces = fixed.count('{') - fixed.count('}')
+                    open_brackets = fixed.count('[') - fixed.count(']')
+                    fixed += ']' * open_brackets + '}' * open_braces
+                    entities = json.loads(fixed)
+                    print(f"[RECOVERED] Salvaged partial JSON with {len(entities)} entity types")
+                    return {k: v for k, v in entities.items() if k in allowed_labels and isinstance(v, list)}
+            except:
+                pass
             return {}
         except Exception as e:
             print(f"Warning: Entity extraction failed: {e}")
