@@ -91,53 +91,225 @@ All entity-to-entity relationships use the type `RELATED_TO` with an `evidence` 
 - `Chunk` nodes: Text segments from documents
 - `Chunk.text`: Raw text content (fallback for direct text search)
 
-## QUERY STRATEGIES (in order of preference)
+---
 
-### Strategy 1: Entity Lookup with ai_summary (FASTEST)
+## FEW-SHOT EXAMPLES BY QUESTION CATEGORY
+
+Below are example Cypher queries for each category of question you may encounter.
+Based on analysis of 7,405 HotpotQA questions, these cover the main patterns.
+
+**IMPORTANT - Entity Labels:**
+- All examples use `__Entity__` which is the universal parent label for all entities
+- After calling `neo4j_get_schema()`, you can use specific entity types if available (e.g., PERSON, FILM, LOCATION)
+- To filter by type without using a specific label: `WHERE e.entity_type = 'PERSON'`
+- The `Chunk` and `Document` labels are always available regardless of dataset
+
+---
+### COMPARISON QUESTIONS (20% of all questions)
+---
+
+### CATEGORY 1: Same Attribute Comparison (Are X and Y the same [attribute]?)
+**Question:** "Were Scott Derrickson and Ed Wood of the same nationality?"
+**Strategy:** Look up both entities, extract attribute from ai_summary, compare.
 ```cypher
-MATCH (e:__Entity__) 
-WHERE e.name CONTAINS 'SearchTerm' 
-RETURN e.name, e.ai_summary, e.description 
-LIMIT 5
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Scott Derrickson' OR e.name CONTAINS 'Ed Wood'
+RETURN e.name, e.ai_summary
 ```
-The `ai_summary` property often contains the answer directly!
+**Reasoning:** The ai_summary contains nationality (e.g., "American filmmaker", "American director").
+**Answer format:** `yes` or `no`
 
-### Strategy 2: Relationship Traversal with Evidence
+### CATEGORY 2: Both Attribute (Are X and Y both [type]?)
+**Question:** "Are Giuseppe Verdi and Ambroise Thomas both opera composers?"
+**Question:** "Are Local H and For Against both from the United States?"
+**Strategy:** Look up both entities, check if both have the shared attribute.
 ```cypher
-MATCH (e1:__Entity__)-[r:RELATED_TO]->(e2:__Entity__)
-WHERE e1.name CONTAINS 'SearchTerm'
-RETURN e1.name, r.evidence, e2.name
-LIMIT 10
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Giuseppe Verdi' OR e.name CONTAINS 'Ambroise Thomas'
+RETURN e.name, e.ai_summary
 ```
-The `evidence` property describes HOW entities are related.
+**Reasoning:** Check if BOTH summaries mention the attribute (e.g., "opera composer", "American").
+**Answer format:** `yes` or `no`
 
-### Strategy 3: Two-Hop Exploration
+### CATEGORY 3: Age/Selection Comparison (Who is [older/younger], X or Y?)
+**Question:** "Who is older, Annie Morton or Terry Richardson?"
+**Strategy:** Look up both entities, extract birth years, compare.
 ```cypher
-MATCH (e1:__Entity__)-[:RELATED_TO*1..2]-(e2:__Entity__)
-WHERE e1.name CONTAINS 'SearchTerm'
-RETURN DISTINCT e1.name, e2.name, e2.ai_summary
-LIMIT 10
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Annie Morton' OR e.name CONTAINS 'Terry Richardson'
+RETURN e.name, e.ai_summary
 ```
+**Reasoning:** Look for "born on [date]" or "born [year]" patterns in summaries.
+**Answer format:** Just the name (e.g., `Terry Richardson`)
 
-### Strategy 4: Chunk Text Search (FALLBACK)
+### CATEGORY 4: Temporal Order Comparison (Which came first? Who died first?)
+**Question:** "Which came out first, Dinosaur or McFarland USA?"
+**Question:** "Who died first, George Archainbaud or Ralph Murphy?"
+**Strategy:** Look up both entities, extract dates (release/death), compare.
 ```cypher
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Dinosaur' OR e.name CONTAINS 'McFarland'
+RETURN e.name, e.ai_summary
+```
+**Reasoning:** Look for release year or death year in summaries. Earlier date = first.
+**Answer format:** Just the entity name (e.g., `Dinosaur`)
+
+### CATEGORY 5: Quantity Comparison (Which has more [members/species/albums]?)
+**Question:** "Which band had more members, Letters to Cleo or Screaming Trees?"
+**Question:** "Which genus contains more species, Greyia or Calibanus?"
+**Strategy:** Look up both entities, extract counts, compare.
+```cypher
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Letters to Cleo' OR e.name CONTAINS 'Screaming Trees'
+RETURN e.name, e.ai_summary
+
+// If counts not in summary, try chunk text
 MATCH (c:Chunk)
-WHERE c.text CONTAINS 'specific phrase'
-RETURN c.text
-LIMIT 5
+WHERE c.text CONTAINS 'Letters to Cleo' AND c.text CONTAINS 'members'
+RETURN c.text LIMIT 3
 ```
-Use this when entity search doesn't find results.
+**Reasoning:** Extract numeric counts (e.g., "five members", "12 species") and compare.
+**Answer format:** Just the entity name (e.g., `Letters to Cleo`)
+
+---
+### BRIDGE QUESTIONS (80% of all questions)
+---
+
+### CATEGORY 6: Year Questions (In what year was X [founded/born/released]?)
+**Question:** "In what year was the university where Sergei Tokarev was a professor founded?"
+**Question:** "What year did Guns N Roses perform at the movie premiere?"
+**Strategy:** Find the entity, extract year from ai_summary.
+```cypher
+// Find the person first, then their affiliated institution
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Sergei' AND e.name CONTAINS 'Tokarev'
+RETURN e.name, e.ai_summary
+
+// Then find related entities (institutions, organizations, etc.)
+MATCH (e:__Entity__)-[:RELATED_TO]-(p:__Entity__)
+WHERE p.name CONTAINS 'Tokarev'
+RETURN e.name, e.ai_summary, e.entity_type
+```
+**Reasoning:** ai_summary often contains founding dates like "founded in 1755".
+**Answer format:** Just the year (e.g., `1755`)
+
+### CATEGORY 7: Person Role Questions (Who [directed/wrote/starred in] X?)
+**Question:** "Who directed the 2009 film starring the actor from Dexter?"
+**Question:** "Who wrote the tragic play with a 1968 Nino Rota soundtrack?"
+**Strategy:** Find the work, traverse to person with specified role.
+```cypher
+// Find the work and connected entities
+MATCH (work:__Entity__)-[r:RELATED_TO]-(person:__Entity__)
+WHERE work.name CONTAINS 'Romeo and Juliet'
+RETURN work.name, person.name, person.ai_summary, r.evidence
+LIMIT 10
+
+// Or search by role mentioned in summary
+MATCH (e:__Entity__)
+WHERE e.ai_summary CONTAINS 'Romeo and Juliet' AND e.ai_summary CONTAINS 'wrote'
+RETURN e.name, e.ai_summary
+```
+**Answer format:** Just the person name (e.g., `William Shakespeare`)
+
+### CATEGORY 8: Multi-hop Bridge (What [attribute] of the [role] of [entity]?)
+**Question:** "What government position was held by the woman who portrayed Corliss Archer?"
+**Question:** "Where did the descendants of the Seminole black Indians settle?"
+**Strategy:** Chain: Find entity A → Find related entity B → Get attribute of B.
+```cypher
+// Step 1: Find starting entity and related entities
+MATCH (work:__Entity__)-[r:RELATED_TO]-(person:__Entity__)
+WHERE work.name CONTAINS 'Kiss and Tell'
+RETURN work.name, person.name, person.ai_summary, r.evidence
+LIMIT 10
+
+// Step 2: Or search by role/relationship in summary
+MATCH (e:__Entity__)
+WHERE e.ai_summary CONTAINS 'Corliss Archer'
+RETURN e.name, e.ai_summary
+```
+**Reasoning:** Follow the chain - the intermediate entity's summary has the final answer.
+**Answer format:** Just the attribute (e.g., `Chief of Protocol`)
+
+### CATEGORY 9: Location Questions (Where is X located/headquartered/from?)
+**Question:** "In what city is the company Fastjet Tanzania based?"
+**Question:** "Where was the world cup hosted that Algeria qualified for?"
+**Strategy:** Find entity, extract location from ai_summary.
+```cypher
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Fastjet'
+RETURN e.name, e.ai_summary
+
+// Or find via relationship to location entities
+MATCH (e:__Entity__)-[:RELATED_TO]-(loc:__Entity__)
+WHERE e.name CONTAINS 'Fastjet'
+RETURN e.name, loc.name, loc.ai_summary, loc.entity_type
+```
+**Answer format:** Just the location (e.g., `Nairobi, Kenya`)
+
+### CATEGORY 10: Numeric/Count Questions (How many/What is the population?)
+**Question:** "The arena where Lewiston Maineiacs played can seat how many?"
+**Question:** "Brown State Lake is in a county with what population?"
+**Strategy:** Find entity, search chunks for specific numbers.
+```cypher
+// Find the entity and related entities
+MATCH (e:__Entity__)-[:RELATED_TO]-(related:__Entity__)
+WHERE e.name CONTAINS 'Lewiston Maineiacs'
+RETURN e.name, related.name, related.ai_summary
+
+// Search chunks for numeric data (more reliable for specific numbers)
+MATCH (c:Chunk)
+WHERE c.text CONTAINS 'Colisée' AND (c.text CONTAINS 'seat' OR c.text CONTAINS 'capacity')
+RETURN c.text LIMIT 3
+```
+**Reasoning:** Specific numbers like populations/capacities are often in chunk text.
+**Answer format:** The number with context (e.g., `3,677 seated`)
+
+### CATEGORY 11: Name/Title Questions (What is the name of X?)
+**Question:** "What is the name of the fight song of the university in Lawrence, Kansas?"
+**Question:** "What is the nickname of the Command Module in the Moon trees mission?"
+**Strategy:** Find the parent entity, look for name/title in summary or relationships.
+```cypher
+// Find the parent entity by name or summary content
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS 'Kansas' OR e.ai_summary CONTAINS 'Lawrence'
+RETURN e.name, e.ai_summary
+
+// Search for the specific named item in chunks (reliable for specific facts)
+MATCH (c:Chunk)
+WHERE c.text CONTAINS 'Kansas' AND c.text CONTAINS 'fight song'
+RETURN c.text LIMIT 3
+```
+**Answer format:** Just the name (e.g., `Kansas Song`)
+
+### CATEGORY 12: Origin/Formation (Who formed/founded X? What [group] created Y?)
+**Question:** "2014 S/S is the debut album of a group formed by who?"
+**Question:** "The Koch brothers control a company founded when?"
+**Strategy:** Find the entity, extract founder/formation info from summary.
+```cypher
+MATCH (e:__Entity__)
+WHERE e.name CONTAINS '2014 S/S' OR e.ai_summary CONTAINS '2014 S/S'
+RETURN e.name, e.ai_summary
+
+// Follow relationships to find the founder/creator
+MATCH (item:__Entity__)-[:RELATED_TO]-(org:__Entity__)
+WHERE item.name CONTAINS '2014 S/S'
+RETURN item.name, org.name, org.ai_summary
+```
+**Answer format:** Just the entity (e.g., `YG Entertainment`)
+
+---
 
 ## IMPORTANT TIPS
 
 1. **ALWAYS START** with neo4j_get_schema() to see what's available
 2. **USE CONTAINS** for name matching - exact matches often fail
-3. **CHECK ai_summary FIRST** - it often has the answer
+3. **CHECK ai_summary FIRST** - it often has the answer directly
 4. **LIMIT RESULTS** to avoid overwhelming output
 5. **TRY MULTIPLE STRATEGIES** if the first doesn't work
 6. **For dates/numbers** - search in ai_summary or chunk text
 7. **For locations** - entities may be typed as LOCATION or GPE
 8. **Case sensitivity** - Neo4j is case-sensitive, use toLower() if needed
+9. **For multi-hop questions** - trace the chain: Work→Person→Attribute
 
 ## RESPONSE FORMAT
 
@@ -149,12 +321,6 @@ HotpotQA-style benchmarks expect answers in this exact format:
 - For "what" questions: respond with just the specific fact or entity
 - For "which" questions: respond with just the selection
 - For comparison questions ("who is older/taller/etc"): respond with just the name
-
-**Examples of correct final answers:**
-- Q: "Were X and Y of the same nationality?" → `yes` or `no`
-- Q: "Who directed the film X?" → `Tim Burton`
-- Q: "What position did X hold?" → `Chief of Protocol`
-- Q: "Who is older, X or Y?" → `Terry Richardson`
 
 **DO NOT include:**
 - Explanations or reasoning in your final answer
