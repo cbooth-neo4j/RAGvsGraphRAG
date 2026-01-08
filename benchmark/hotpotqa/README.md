@@ -49,6 +49,35 @@ python -m benchmark.hotpotqa.benchmark_pipeline full
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
+## Partial Ingestion Support
+
+The benchmark supports running on **partially ingested** databases. This is useful when:
+- Ingestion was interrupted (power cut, crash)
+- You hit database size limits
+- You want to test before ingestion completes
+
+### Question Selection Priority
+
+The benchmark selects testable questions using this priority:
+
+1. **`:__TestableQuestions__`** - Pre-computed by `--check-testable`, stored in Neo4j (database-specific)
+2. **`testable_questions.json`** - Local file backup of testable questions
+3. **`:__IngestionManifest__`** - Saved when ingestion completes successfully
+4. **`:__IngestionProgress__`** - Updated every 10 articles during ingestion
+5. **Direct DB scan** - Fallback to scanning Document nodes
+
+> Storing testable questions in Neo4j means each database instance tracks its own state.
+
+### Check Testable Questions
+
+```bash
+# See how many questions can be tested with current database state
+python ingest.py --check-testable --quantity 100
+```
+
+A question is "testable" only if **ALL** its supporting Wikipedia articles are in the database.
+HotpotQA is a multi-hop QA dataset, so each question needs ~10 articles on average.
+
 ## CLI Options
 
 ```bash

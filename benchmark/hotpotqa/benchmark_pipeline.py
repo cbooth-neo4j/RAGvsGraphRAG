@@ -122,38 +122,118 @@ def run_hotpotqa_benchmark(
     questions = corpus["questions"]
     articles = corpus["articles"]
     
-    # Check for ingestion manifest in Neo4j (source of truth)
+    # Check for ingestion state in Neo4j (supports both completed and partial ingestion)
     from neo4j import GraphDatabase
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
     
-    manifest = None
+    neo4j_uri = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
+    neo4j_user = os.environ.get('NEO4J_USERNAME', 'neo4j')
+    neo4j_password = os.environ.get('NEO4J_PASSWORD', 'password')
+    neo4j_db = os.environ.get('CLIENT_NEO4J_DATABASE', 'neo4j')
+    
+    ingested_articles = None
+    ingestion_source = None
+    
     try:
-        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        with driver.session() as session:
+        driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        with driver.session(database=neo4j_db) as session:
+            # Priority 1: Check for __TestableQuestions__ node in Neo4j (database-specific)
             result = session.run("""
-                MATCH (m:__IngestionManifest__ {id: 'current'})
-                RETURN m.source as source, m.ingested_at as ingested_at,
-                       m.questions_count as questions_count, m.articles_count as articles_count,
-                       m.article_titles as article_titles, m.question_ids as question_ids,
-                       m.lean_mode as lean_mode
+                MATCH (t:__TestableQuestions__ {id: 'current'})
+                RETURN t.question_ids as question_ids,
+                       t.testable_count as testable_count,
+                       t.computed_at as computed_at
             """)
             record = result.single()
-            if record:
-                manifest = dict(record)
+            if record and record['question_ids']:
+                testable_ids = set(record['question_ids'])
+                print(f"[TESTABLE] Using pre-computed testable questions from Neo4j :__TestableQuestions__")
+                print(f"           {len(testable_ids)} questions with complete article coverage")
+                print(f"           Computed at: {record.get('computed_at', 'unknown')}")
+                
+                # Filter questions by testable IDs
+                original_count = len(questions)
+                questions = [q for q in questions if q.get('_id') in testable_ids]
+                print(f"[FILTER] Filtered questions from {original_count} to {len(questions)}")
+                ingestion_source = "testable_neo4j"
+            
+            # Priority 2: Fall back to testable_questions.json file
+            if not ingestion_source:
+                testable_file = Path(cache_dir) / "testable_questions.json"
+                if testable_file.exists():
+                    try:
+                        with open(testable_file, 'r', encoding='utf-8') as f:
+                            testable_data = json.load(f)
+                        testable_ids = set(testable_data.get('testable_question_ids', []))
+                        if testable_ids:
+                            print(f"[TESTABLE] Using pre-computed testable questions from {testable_file}")
+                            print(f"           {len(testable_ids)} questions with complete article coverage")
+                            
+                            # Filter questions by testable IDs
+                            original_count = len(questions)
+                            questions = [q for q in questions if q.get('_id') in testable_ids]
+                            print(f"[FILTER] Filtered questions from {original_count} to {len(questions)}")
+                            ingestion_source = "testable_file"
+                    except Exception as e:
+                        print(f"[WARNING] Could not read testable_questions.json: {e}")
+            
+            # Priority 3: Check __IngestionManifest__ (completed ingestion)
+            if not ingestion_source:
+                result = session.run("""
+                    MATCH (m:__IngestionManifest__ {id: 'current'})
+                    RETURN m.source as source, m.ingested_at as ingested_at,
+                           m.questions_count as questions_count, m.articles_count as articles_count,
+                           m.article_titles as article_titles, m.question_ids as question_ids,
+                           m.lean_mode as lean_mode
+                """)
+                record = result.single()
+                if record:
+                    manifest = dict(record)
+                    ingested_articles = set(manifest.get('article_titles', []) or [])
+                    print(f"[MANIFEST] Found completed ingestion: {manifest.get('questions_count', '?')} questions, {manifest.get('articles_count', '?')} articles")
+                    print(f"           Ingested at: {manifest.get('ingested_at', 'unknown')}")
+                    print(f"           Mode: {'LEAN' if manifest.get('lean_mode') else 'FULL'}")
+                    ingestion_source = "manifest"
+            
+            # Priority 4: Check __IngestionProgress__ (interrupted/partial ingestion)
+            if not ingestion_source:
+                result = session.run("""
+                    MATCH (p:__IngestionProgress__ {id: 'current'})
+                    RETURN p.processed_titles as processed_titles,
+                           p.total_expected as total_expected,
+                           p.questions_count as questions_count,
+                           p.last_updated as last_updated
+                """)
+                record = result.single()
+                if record:
+                    ingested_articles = set(record['processed_titles'] or [])
+                    print(f"[PROGRESS] Found partial ingestion: {len(ingested_articles)}/{record.get('total_expected', '?')} articles")
+                    print(f"           Last updated: {record.get('last_updated', 'unknown')}")
+                    print(f"           Note: Ingestion may still be in progress or was interrupted")
+                    ingestion_source = "progress"
+            
+            # Priority 5: Fall back to scanning Document nodes
+            if not ingestion_source:
+                result = session.run("""
+                    MATCH (d:Document)
+                    WHERE d.name STARTS WITH 'wiki_'
+                    WITH d.name as name
+                    WITH split(name, '_') as parts
+                    WITH parts[1..size(parts)-1] as title_parts
+                    WITH reduce(s = '', x IN title_parts | s + CASE WHEN s = '' THEN '' ELSE '_' END + x) as title
+                    RETURN collect(DISTINCT title) as titles
+                """)
+                record = result.single()
+                if record and record['titles']:
+                    ingested_articles = set(record['titles'])
+                    print(f"[SCAN] Scanned database directly: found {len(ingested_articles)} articles")
+                    ingestion_source = "scan"
+        
         driver.close()
     except Exception as e:
-        print(f"[WARNING] Could not read manifest from Neo4j: {e}")
+        print(f"[WARNING] Could not connect to Neo4j: {e}")
     
-    if manifest:
-        ingested_articles = set(manifest.get('article_titles', []) or [])
-        ingested_question_ids = set(manifest.get('question_ids', []) or [])
-        
-        print(f"[MANIFEST] Found in Neo4j: {manifest.get('questions_count', '?')} questions, {manifest.get('articles_count', '?')} articles")
-        print(f"           Ingested at: {manifest.get('ingested_at', 'unknown')}")
-        print(f"           Mode: {'LEAN' if manifest.get('lean_mode') else 'FULL'}")
-        
-        # Filter questions to only those whose supporting articles were ingested
+    # Filter questions based on ingested articles (skip if already filtered by testable questions)
+    if ingested_articles and ingestion_source not in ("testable_neo4j", "testable_file"):
         original_count = len(questions)
         filtered_questions = []
         for q in questions:
@@ -171,13 +251,15 @@ def run_hotpotqa_benchmark(
         print(f"[FILTER] Filtered questions from {original_count} to {len(questions)} (matching ingested articles)")
         
         if len(questions) == 0:
-            print("\n[ERROR] No questions match the ingested articles!")
-            print("        Run: python ingest.py --source hotpotqa --quantity N --lean")
-            print("        Then re-run this benchmark.")
+            print("\n[ERROR] No questions have complete article coverage!")
+            print("        Either:")
+            print("        1. Wait for ingestion to complete, or")
+            print("        2. Run: python ingest.py --check-testable --quantity N")
+            print("           to see which questions can be tested")
             return {"error": "No matching questions", "phases": {}}
-    else:
-        print("[WARNING] No ingestion manifest found in Neo4j - testing may include questions without matching articles")
-        print("          Run: python ingest.py --source hotpotqa --quantity N --lean")
+    elif not ingested_articles:
+        print("[WARNING] No ingestion state found - testing may include questions without matching articles")
+        print("          Run: python ingest.py --source hotpotqa --quantity N --lean --new")
     
     # Apply question limit if needed (after manifest filtering)
     if config["question_limit"] and len(questions) > config["question_limit"]:

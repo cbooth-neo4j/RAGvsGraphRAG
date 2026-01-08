@@ -78,26 +78,62 @@ docker run --name neo4j-rag \
 
 Use `ingest.py` to build the knowledge graph. You **must** specify:
 - `--source`: Data source (`pdf` or `hotpotqa`)
-- `--quantity`: Number of documents/questions to process
+- `--quantity`: Number of questions you want to be able to answer
 - `--lean` or `--full`: Build mode
+- `--new` or `--resume`: Start mode
 
 ```bash
 # Build from PDFs (place files in ./PDFs/ folder)
-python ingest.py --source pdf --quantity 10 --lean
+python ingest.py --source pdf --quantity 10 --lean --new
 
-# Build from HotpotQA Wikipedia articles
-python ingest.py --source hotpotqa --quantity 100 --lean    # Minimal graph
-python ingest.py --source hotpotqa --quantity 1000 --full   # With summaries + communities
+# Build from HotpotQA Wikipedia articles  
+python ingest.py --source hotpotqa --quantity 100 --lean --new     # Fresh start, clears DB
+python ingest.py --source hotpotqa --quantity 100 --lean --resume  # Resume interrupted run
+python ingest.py --source hotpotqa --quantity 1000 --full --new    # Full graph with summaries
 ```
 
-| Mode | Build Time | Features |
-|------|-----------|----------|
+| Build Mode | Build Time | Features |
+|------------|-----------|----------|
 | `--lean` | Fast | Document->Chunk->Entity + RELATES_TO (query-time intelligence) |
 | `--full` | Slower | Adds AI summaries + community detection |
 
-> **Ingestion Manifest:** When ingesting HotpotQA, a manifest is saved to Neo4j (`:__IngestionManifest__` node) 
+| Start Mode | Behavior |
+|------------|----------|
+| `--new` | Clears database and starts fresh ingestion |
+| `--resume` | Skips already-processed articles, continues from checkpoint |
+
+> **Resumable Ingestion:** Progress is tracked in Neo4j (`:__IngestionProgress__` node).
+> The system tracks both articles processed AND which questions become answerable.
+> If ingestion is interrupted (power cut, crash, Ctrl+C), use `--resume` to continue where it left off.
+> Progress is saved: (1) whenever a new question becomes answerable, (2) every 50 articles for safety.
+
+> **Ingestion Manifest:** When ingestion completes, a manifest is saved to Neo4j (`:__IngestionManifest__` node) 
 > tracking which questions/articles were ingested. The benchmark reads this to ensure question-article pairing.
 > This allows multiple Neo4j instances (lean vs full) to each carry their own manifest.
+
+#### Check Testable Questions (Partial Ingestion)
+
+If ingestion is interrupted or you hit database limits, check which questions can be tested:
+
+```bash
+# Check which questions have ALL their supporting articles ingested
+python ingest.py --check-testable --quantity 100
+```
+
+This outputs:
+- Number of **testable questions** (questions with complete article coverage)
+- Missing articles for incomplete questions
+- Saves testable question IDs to Neo4j (`:__TestableQuestions__` node) **and** local file
+
+The benchmark **automatically selects** testable questions using this priority:
+1. `:__TestableQuestions__` (pre-computed, stored in Neo4j - database-specific)
+2. `testable_questions.json` (local file backup)
+3. `:__IngestionManifest__` (completed ingestion)
+4. `:__IngestionProgress__` (partial/interrupted ingestion)
+5. Direct database scan (fallback)
+
+> **Why Neo4j?** Storing testable questions in Neo4j means each database instance tracks its own state.
+> If you switch databases (e.g., lean vs full graphs), each has its own testable questions list.
 
 ### 4. Run Benchmark (Test Only)
 
@@ -105,7 +141,7 @@ The benchmark tests **only the questions whose articles were ingested**:
 
 ```bash
 # Step 1: Ingest (creates manifest)
-python ingest.py --source hotpotqa --quantity 100 --lean
+python ingest.py --source hotpotqa --quantity 100 --lean --new
 
 # Step 2: Benchmark (reads manifest, tests matching questions)
 python -m benchmark.hotpotqa.benchmark_pipeline smoke --hotpotqa --agentic-text2cypher
